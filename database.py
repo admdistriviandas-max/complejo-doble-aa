@@ -1,5 +1,6 @@
 import aiosqlite
 import os
+from datetime import date, timedelta
 
 DB_PATH = os.getenv("DB_PATH", "doble_aa.db")
 
@@ -64,6 +65,21 @@ CREATE TABLE IF NOT EXISTS configuracion (
     clave TEXT PRIMARY KEY,
     valor TEXT NOT NULL DEFAULT ''
 );
+
+-- Turnos fijos: el mismo cliente, mismo día de la semana, misma hora y cancha, todas las semanas
+CREATE TABLE IF NOT EXISTS turnos_fijos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dia_semana INTEGER NOT NULL,  -- 0=lunes ... 6=domingo
+    hora TEXT NOT NULL,
+    cancha INTEGER NOT NULL,
+    cliente_id INTEGER,
+    cliente_nombre TEXT NOT NULL,
+    monto_total REAL DEFAULT 0,
+    desde TEXT NOT NULL,          -- YYYY-MM-DD primera fecha
+    hasta TEXT,                   -- YYYY-MM-DD última fecha (NULL = sin fin)
+    activo INTEGER DEFAULT 1,
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 async def get_db():
@@ -71,10 +87,53 @@ async def get_db():
     db.row_factory = aiosqlite.Row
     return db
 
+
+async def generar_turnos_fijos(db, desde: date, hasta: date) -> None:
+    """Crea automáticamente (como 'señado') las reservas de los turnos fijos
+    entre dos fechas, si todavía no existen. Si una semana se canceló ese turno
+    fijo, no se vuelve a crear. Si otro cliente ocupa el horario, se respeta."""
+    async with db.execute("SELECT * FROM turnos_fijos WHERE activo=1") as cur:
+        fijos = await cur.fetchall()
+    if not fijos:
+        return
+    creadas = False
+    d = desde
+    while d <= hasta:
+        f = d.isoformat()
+        for tf in fijos:
+            if tf["dia_semana"] != d.weekday() or f < tf["desde"]:
+                continue
+            if tf["hasta"] and f > tf["hasta"]:
+                continue
+            async with db.execute(
+                """SELECT id FROM reservas WHERE fecha=? AND hora=? AND cancha=?
+                   AND (turno_fijo_id=? OR estado != 'cancelado') LIMIT 1""",
+                (f, tf["hora"], tf["cancha"], tf["id"])
+            ) as cur:
+                if await cur.fetchone():
+                    continue
+            await db.execute(
+                """INSERT INTO reservas (fecha, hora, cancha, cliente_id, cliente_nombre,
+                   estado, monto_total, monto_senia, monto_pagado, notas, turno_fijo_id)
+                   VALUES (?,?,?,?,?,'señado',?,0,0,'Turno fijo',?)""",
+                (f, tf["hora"], tf["cancha"], tf["cliente_id"], tf["cliente_nombre"],
+                 tf["monto_total"] or 0, tf["id"])
+            )
+            creadas = True
+        d += timedelta(days=1)
+    if creadas:
+        await db.commit()
+
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
         await db.commit()
+        # Migración: columna turno_fijo_id en reservas (bases ya existentes)
+        async with db.execute("PRAGMA table_info(reservas)") as cur:
+            columnas = [r[1] for r in await cur.fetchall()]
+        if "turno_fijo_id" not in columnas:
+            await db.execute("ALTER TABLE reservas ADD COLUMN turno_fijo_id INTEGER")
+            await db.commit()
         # Productos de ejemplo si la tabla está vacía
         async with db.execute("SELECT COUNT(*) FROM productos") as cur:
             count = (await cur.fetchone())[0]

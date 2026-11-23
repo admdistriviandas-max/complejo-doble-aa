@@ -17,7 +17,7 @@ import os
 import httpx
 from datetime import date, timedelta
 from fastapi import APIRouter, Request, Form, Response
-from database import get_db
+from database import get_db, generar_turnos_fijos
 
 router = APIRouter()
 
@@ -115,6 +115,7 @@ async def buscar_disponibilidad(fecha: date, hora: int = None) -> list[dict]:
     """Retorna los slots libres para una fecha (y hora opcional)."""
     db = await get_db()
     try:
+        await generar_turnos_fijos(db, fecha, fecha)
         async with db.execute(
             "SELECT hora, cancha FROM reservas WHERE fecha=? AND estado != 'cancelado'",
             (fecha.isoformat(),)
@@ -135,6 +136,7 @@ async def crear_reserva_bot(fecha: date, hora: int, cancha: int, nombre_cliente:
     """Crea la reserva con seña por defecto. Retorna (reserva_id, True) o (0, False)."""
     db = await get_db()
     try:
+        await generar_turnos_fijos(db, fecha, fecha)
         async with db.execute(
             "SELECT id FROM reservas WHERE fecha=? AND hora=? AND cancha=? AND estado != 'cancelado'",
             (fecha.isoformat(), str(hora), cancha)

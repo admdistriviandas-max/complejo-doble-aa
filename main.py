@@ -5,7 +5,7 @@ from fastapi.templating import Jinja2Templates
 from datetime import date, timedelta
 import json, hashlib, secrets, os
 
-from database import init_db, get_db
+from database import init_db, get_db, generar_turnos_fijos
 from bot import router as bot_router
 from mercadopago_service import router as mp_router, crear_link_pago
 
@@ -79,9 +79,12 @@ async def get_agenda(semana: str):
     dias = [(inicio + timedelta(days=i)).isoformat() for i in range(7)]
     db = await get_db()
     try:
+        await generar_turnos_fijos(db, inicio, inicio + timedelta(days=6))
         placeholders = ",".join("?" * len(dias))
         async with db.execute(
-            f"SELECT * FROM reservas WHERE fecha IN ({placeholders})",
+            f"""SELECT r.*, COALESCE(tf.activo, 0) AS es_fijo
+                FROM reservas r LEFT JOIN turnos_fijos tf ON tf.id = r.turno_fijo_id
+                WHERE r.fecha IN ({placeholders})""",
             dias
         ) as cur:
             rows = await cur.fetchall()
@@ -102,12 +105,16 @@ async def crear_reserva(request: Request):
     monto_senia = float(data.get("monto_senia", 0))
     monto_pagado = float(data.get("monto_pagado", 0))
     notas = data.get("notas", "")
+    es_fijo = bool(data.get("turno_fijo"))
 
     if not all([fecha, hora, cancha, cliente_nombre]):
         raise HTTPException(400, "Datos incompletos")
 
     db = await get_db()
     try:
+        # Si ese día corresponde a un turno fijo, crearlo antes de verificar
+        f = date.fromisoformat(fecha)
+        await generar_turnos_fijos(db, f, f)
         # Verificar que el turno esté libre
         async with db.execute(
             "SELECT id FROM reservas WHERE fecha=? AND hora=? AND cancha=? AND estado != 'cancelado'",
@@ -132,18 +139,70 @@ async def crear_reserva(request: Request):
             )
             cliente_id = cur.lastrowid
 
+        turno_fijo_id = None
+        if es_fijo:
+            turno_fijo_id = await crear_turno_fijo(
+                db, fecha, hora, int(cancha), cliente_id, cliente_nombre, monto_total)
+
         cur = await db.execute(
             """INSERT INTO reservas (fecha, hora, cancha, cliente_id, cliente_nombre,
-               estado, monto_total, monto_senia, monto_pagado, notas)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               estado, monto_total, monto_senia, monto_pagado, notas, turno_fijo_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (fecha, hora, int(cancha), cliente_id, cliente_nombre,
-             estado, monto_total, monto_senia, monto_pagado, notas)
+             estado, monto_total, monto_senia, monto_pagado, notas, turno_fijo_id)
         )
         reserva_id = cur.lastrowid
         await db.commit()
     finally:
         await db.close()
     return {"id": reserva_id, "ok": True}
+
+
+async def crear_turno_fijo(db, fecha, hora, cancha, cliente_id, cliente_nombre, monto_total):
+    """Registra un turno fijo semanal a partir de una fecha. Devuelve su id."""
+    dia_semana = date.fromisoformat(fecha).weekday()
+    async with db.execute(
+        """SELECT cliente_nombre FROM turnos_fijos WHERE activo=1 AND dia_semana=?
+           AND hora=? AND cancha=?""",
+        (dia_semana, str(hora), int(cancha))
+    ) as cur:
+        otro = await cur.fetchone()
+    if otro:
+        raise HTTPException(409, f"Ese horario ya es turno fijo de {otro['cliente_nombre']}")
+    cur = await db.execute(
+        """INSERT INTO turnos_fijos (dia_semana, hora, cancha, cliente_id, cliente_nombre,
+           monto_total, desde) VALUES (?,?,?,?,?,?,?)""",
+        (dia_semana, str(hora), int(cancha), cliente_id, cliente_nombre,
+         float(monto_total or 0), fecha)
+    )
+    return cur.lastrowid
+
+
+async def quitar_turno_fijo(db, turno_fijo_id, fecha):
+    """Da de baja el turno fijo: se mantiene la reserva de `fecha` y se
+    cancelan las de semanas siguientes que no tengan pagos cargados."""
+    await db.execute(
+        "UPDATE turnos_fijos SET activo=0, hasta=? WHERE id=?", (fecha, turno_fijo_id)
+    )
+    await db.execute(
+        """UPDATE reservas SET estado='cancelado'
+           WHERE turno_fijo_id=? AND fecha > ? AND estado='señado'
+           AND COALESCE(monto_senia,0)=0 AND COALESCE(monto_pagado,0)=0""",
+        (turno_fijo_id, fecha)
+    )
+
+
+@app.get("/api/turnos-fijos")
+async def get_turnos_fijos():
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT * FROM turnos_fijos WHERE activo=1 ORDER BY dia_semana, hora, cancha"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
 
 @app.put("/api/reservas/{reserva_id}")
 async def actualizar_reserva(reserva_id: int, request: Request):
@@ -154,6 +213,28 @@ async def actualizar_reserva(reserva_id: int, request: Request):
             r = await cur.fetchone()
         if not r:
             raise HTTPException(404, "Reserva no encontrada")
+
+        # Turno fijo: activar o quitar desde esta reserva
+        if "turno_fijo" in data:
+            quiere_fijo = bool(data.get("turno_fijo"))
+            tf_id = r["turno_fijo_id"]
+            tf_activo = False
+            if tf_id:
+                async with db.execute(
+                    "SELECT activo FROM turnos_fijos WHERE id=?", (tf_id,)
+                ) as cur:
+                    tf = await cur.fetchone()
+                tf_activo = bool(tf and tf["activo"])
+            if quiere_fijo and not tf_activo:
+                nuevo_id = await crear_turno_fijo(
+                    db, r["fecha"], r["hora"], r["cancha"], r["cliente_id"],
+                    data.get("cliente_nombre", r["cliente_nombre"]),
+                    data.get("monto_total", r["monto_total"]))
+                await db.execute(
+                    "UPDATE reservas SET turno_fijo_id=? WHERE id=?", (nuevo_id, reserva_id))
+            elif not quiere_fijo and tf_activo:
+                await quitar_turno_fijo(db, tf_id, r["fecha"])
+
         await db.execute(
             """UPDATE reservas SET cliente_nombre=?, estado=?, monto_total=?,
                monto_senia=?, monto_pagado=?, notas=? WHERE id=?""",
