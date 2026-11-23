@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, Form, HTTPException, Response, Cookie
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json, hashlib, secrets, os
 
 from database import init_db, get_db, generar_turnos_fijos
@@ -353,32 +353,128 @@ async def get_productos():
     finally:
         await db.close()
 
+def ahora_ar() -> datetime:
+    """Hora de Argentina (UTC-3, sin horario de verano)."""
+    return datetime.now(timezone(timedelta(hours=-3)))
+
+def hoy_ar_str() -> str:
+    return ahora_ar().strftime("%d/%m/%Y")
+
+def _num(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+@app.get("/api/productos/siguiente-codigo")
+async def siguiente_codigo():
+    db = await get_db()
+    try:
+        async with db.execute("SELECT seq FROM sqlite_sequence WHERE name='productos'") as cur:
+            row = await cur.fetchone()
+        if row is None:
+            async with db.execute("SELECT COALESCE(MAX(id),0) FROM productos") as cur:
+                row = await cur.fetchone()
+        return {"codigo": str((row[0] or 0) + 1).zfill(6)}
+    finally:
+        await db.close()
+
+@app.get("/api/productos/rubros")
+async def rubros_productos():
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT DISTINCT categoria FROM productos WHERE activo=1 AND COALESCE(categoria,'')!='' ORDER BY categoria"
+        ) as cur:
+            return [r[0] for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+@app.get("/api/productos/proveedores")
+async def proveedores_productos():
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT DISTINCT proveedor FROM productos WHERE activo=1 AND COALESCE(proveedor,'')!='' ORDER BY proveedor"
+        ) as cur:
+            return [r[0] for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
 @app.post("/api/productos")
 async def crear_producto(request: Request):
     data = await request.json()
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        raise HTTPException(400, "Falta la descripción")
     db = await get_db()
     try:
         cur = await db.execute(
-            "INSERT INTO productos (nombre, categoria, precio, stock) VALUES (?,?,?,?)",
-            (data["nombre"], data.get("categoria","otro"),
-             float(data["precio"]), int(data.get("stock",0)))
+            """INSERT INTO productos (nombre, categoria, precio, stock, precio_compra, proveedor,
+               stock_minimo, fecha_actualizacion, fecha_control_stock)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (nombre, (data.get("categoria") or "otro").strip(),
+             _num(data.get("precio")), int(_num(data.get("stock"))),
+             _num(data.get("precio_compra")), (data.get("proveedor") or "").strip(),
+             int(_num(data.get("stock_minimo"))),
+             data.get("fecha_actualizacion") or hoy_ar_str(),
+             data.get("fecha_control_stock") or "")
         )
         await db.commit()
-        return {"id": cur.lastrowid, "ok": True}
+        return {"id": cur.lastrowid, "codigo": str(cur.lastrowid).zfill(6), "ok": True}
     finally:
         await db.close()
 
 @app.put("/api/productos/{producto_id}")
 async def actualizar_producto(producto_id: int, request: Request):
+    """Actualiza solo los campos enviados. `ajuste_stock` suma/resta al stock actual.
+    Si cambia algún precio y no se manda la fecha, se pone la de hoy."""
     data = await request.json()
     db = await get_db()
     try:
+        async with db.execute("SELECT * FROM productos WHERE id=?", (producto_id,)) as cur:
+            p = await cur.fetchone()
+        if not p:
+            raise HTTPException(404, "Producto no encontrado")
+        p = dict(p)
+        nuevo = dict(p)
+        for campo in ["nombre", "categoria", "proveedor", "fecha_actualizacion", "fecha_control_stock"]:
+            if campo in data and data[campo] is not None:
+                nuevo[campo] = str(data[campo]).strip()
+        for campo in ["precio", "precio_compra"]:
+            if campo in data:
+                nuevo[campo] = _num(data[campo], p[campo] or 0)
+        for campo in ["stock", "stock_minimo", "activo"]:
+            if campo in data:
+                nuevo[campo] = int(_num(data[campo], p[campo] or 0))
+        if "ajuste_stock" in data:
+            nuevo["stock"] = (nuevo["stock"] or 0) + int(_num(data["ajuste_stock"]))
+        if not nuevo["nombre"]:
+            raise HTTPException(400, "Falta la descripción")
+        cambio_precio = (nuevo["precio"] != p["precio"] or
+                         (nuevo["precio_compra"] or 0) != (p["precio_compra"] or 0))
+        if cambio_precio and "fecha_actualizacion" not in data:
+            nuevo["fecha_actualizacion"] = hoy_ar_str()
         await db.execute(
-            "UPDATE productos SET nombre=?, categoria=?, precio=?, stock=?, activo=? WHERE id=?",
-            (data["nombre"], data.get("categoria","otro"),
-             float(data["precio"]), int(data.get("stock",0)),
-             int(data.get("activo",1)), producto_id)
+            """UPDATE productos SET nombre=?, categoria=?, precio=?, stock=?, activo=?,
+               precio_compra=?, proveedor=?, stock_minimo=?, fecha_actualizacion=?,
+               fecha_control_stock=? WHERE id=?""",
+            (nuevo["nombre"], nuevo["categoria"] or "otro", nuevo["precio"], nuevo["stock"],
+             nuevo["activo"], nuevo["precio_compra"] or 0, nuevo["proveedor"] or "",
+             nuevo["stock_minimo"] or 0, nuevo["fecha_actualizacion"] or "",
+             nuevo["fecha_control_stock"] or "", producto_id)
         )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"ok": True, "producto": nuevo, "hora": ahora_ar().strftime("%H:%M")}
+
+@app.delete("/api/productos/{producto_id}")
+async def eliminar_producto(producto_id: int):
+    """Da de baja el producto (no se borra para no perder el historial de ventas)."""
+    db = await get_db()
+    try:
+        await db.execute("UPDATE productos SET activo=0 WHERE id=?", (producto_id,))
         await db.commit()
     finally:
         await db.close()

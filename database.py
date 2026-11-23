@@ -134,6 +134,16 @@ async def init_db():
         if "turno_fijo_id" not in columnas:
             await db.execute("ALTER TABLE reservas ADD COLUMN turno_fijo_id INTEGER")
             await db.commit()
+        # Migración: datos extra de productos (formato El Roble)
+        async with db.execute("PRAGMA table_info(productos)") as cur:
+            cols_prod = [r[1] for r in await cur.fetchall()]
+        for col, tipo in [("precio_compra", "REAL DEFAULT 0"), ("proveedor", "TEXT DEFAULT ''"),
+                          ("stock_minimo", "INTEGER DEFAULT 0"),
+                          ("fecha_actualizacion", "TEXT DEFAULT ''"),
+                          ("fecha_control_stock", "TEXT DEFAULT ''")]:
+            if col not in cols_prod:
+                await db.execute(f"ALTER TABLE productos ADD COLUMN {col} {tipo}")
+        await db.commit()
         # Productos de ejemplo si la tabla está vacía
         async with db.execute("SELECT COUNT(*) FROM productos") as cur:
             count = (await cur.fetchone())[0]
