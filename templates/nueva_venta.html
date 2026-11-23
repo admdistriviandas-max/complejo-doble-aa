@@ -139,10 +139,18 @@
             <div class="pago-tab" data-pago="transferencia" onclick="selectPago('transferencia')">
               <i class="bi bi-phone me-1"></i>Transferencia
             </div>
-            <div class="pago-tab" data-pago="debito" onclick="selectPago('debito')">
-              <i class="bi bi-credit-card me-1"></i>Débito
+            <div class="pago-tab" data-pago="mixto" onclick="selectPago('mixto')">
+              <i class="bi bi-intersect me-1"></i>Mixto
             </div>
           </div>
+        </div>
+
+        <!-- Pago mixto: parte en efectivo, el resto por transferencia -->
+        <div id="mixto-section" class="mb-2" style="display:none">
+          <label class="form-label fw-semibold small mb-1">Parte en efectivo $</label>
+          <input type="number" class="form-control form-control-sm" id="mixto-efectivo"
+                 placeholder="0" min="0" oninput="calcMixto()"/>
+          <div id="mixto-detalle" class="small fw-bold mt-1 text-muted">Transferencia: $0</div>
         </div>
 
         <!-- Efectivo recibido (solo en efectivo) -->
@@ -410,6 +418,7 @@ function actualizarTotal() {
   document.getElementById("total-display").textContent = fmt;
   document.getElementById("ticket-total").textContent = fmt;
   calcVuelto();
+  if (formaPago === "mixto") calcMixto();
 }
 
 // ── Forma de pago ──
@@ -418,7 +427,24 @@ function selectPago(tipo) {
   document.querySelectorAll(".pago-tab").forEach(t => t.classList.remove("active"));
   document.querySelector(`[data-pago="${tipo}"]`).classList.add("active");
   document.getElementById("efectivo-section").style.display = tipo === "efectivo" ? "block" : "none";
+  document.getElementById("mixto-section").style.display = tipo === "mixto" ? "block" : "none";
   document.getElementById("vuelto-display").style.display = "none";
+  if (tipo === "mixto") { calcMixto(); document.getElementById("mixto-efectivo").focus(); }
+}
+
+function totalTicket() { return ticketItems.reduce((s, i) => s + i.precio * i.cantidad, 0); }
+
+function calcMixto() {
+  const total = totalTicket();
+  const ef = parseFloat(document.getElementById("mixto-efectivo").value) || 0;
+  const div = document.getElementById("mixto-detalle");
+  if (ef > total) {
+    div.textContent = `El efectivo supera el total ($${total.toLocaleString("es-AR")})`;
+    div.className = "small fw-bold mt-1 text-danger";
+  } else {
+    div.textContent = `Efectivo: $${ef.toLocaleString("es-AR")} · Transferencia: $${(total - ef).toLocaleString("es-AR")}`;
+    div.className = "small fw-bold mt-1 text-success";
+  }
 }
 
 function calcVuelto() {
@@ -446,6 +472,7 @@ function limpiarTicket() {
   if (ticketItems.length && !confirm("¿Limpiar el ticket actual?")) return;
   ticketItems = [];
   document.getElementById("efectivo-input").value = "";
+  document.getElementById("mixto-efectivo").value = "";
   document.getElementById("ticket-notas").value = "";
   renderTicket();
 }
@@ -465,6 +492,18 @@ async function confirmarVenta() {
     precio: i.precio
   }));
 
+  // Pago mixto: la parte en efectivo tiene que ser mayor a 0 y menor al total
+  let monto_efectivo = null;
+  if (formaPago === "mixto") {
+    monto_efectivo = parseFloat(document.getElementById("mixto-efectivo").value) || 0;
+    const total = totalTicket();
+    if (!(monto_efectivo > 0) || monto_efectivo >= total) {
+      alert(`En pago mixto escribí cuánto paga en efectivo (más de $0 y menos de $${total.toLocaleString("es-AR")}). El resto va por transferencia.`);
+      document.getElementById("mixto-efectivo").focus();
+      return;
+    }
+  }
+
   const btn = document.querySelector(".btn-confirmar");
   btn.disabled = true;
   btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Guardando…';
@@ -478,7 +517,7 @@ async function confirmarVenta() {
     const res = await fetch("/api/ventas", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, fecha, forma_pago: formaPago, notas, efectivo_recibido })
+      body: JSON.stringify({ items, fecha, forma_pago: formaPago, notas, efectivo_recibido, monto_efectivo })
     });
     if (!res.ok) throw new Error("Error al guardar");
     const data = await res.json();
@@ -493,6 +532,7 @@ async function confirmarVenta() {
     mostrarConfirmacion(data.ticket);
     ticketItems = [];
     document.getElementById("efectivo-input").value = "";
+    document.getElementById("mixto-efectivo").value = "";
     document.getElementById("ticket-notas").value = "";
     renderTicket();
   } catch (e) {

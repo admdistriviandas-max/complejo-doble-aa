@@ -208,6 +208,11 @@
     <span style="color:#444">Pago:</span>
     <span><strong>{{ ticket.forma_pago_txt }}</strong></span>
   </div>
+  {% if ticket.forma_pago == 'mixto' %}
+  <div style="font-size:13px;color:#555;text-align:right">
+    Efectivo: ${{ ticket.monto_efectivo|ar }} / Transferencia: ${{ ticket.monto_transferencia|ar }}
+  </div>
+  {% endif %}
   {% if ticket.forma_pago == 'efectivo' and ticket.efectivo_recibido and ticket.efectivo_recibido > 0 %}
   <div style="font-size:13px;color:#555;text-align:right">
     Recibido: ${{ ticket.efectivo_recibido|ar }}{% if ticket.vuelto > 0 %} / Vuelto: ${{ ticket.vuelto|ar }}{% endif %}
