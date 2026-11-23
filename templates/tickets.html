@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% set active = "tickets" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <h4 class="fw-bold mb-0"><i class="bi bi-receipt me-2 text-celeste-o"></i>Tickets del día</h4>
+  <div class="d-flex align-items-center gap-2">
+    <span class="fw-semibold">{{ fecha_ar }}</span>
+    <button class="btn btn-sm btn-outline-celeste" onclick="cargarTickets()" title="Actualizar">
+      <i class="bi bi-arrow-clockwise"></i>
+    </button>
+  </div>
+</div>
+
+<div class="card p-0">
+  <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom" style="background:var(--celeste-claro)">
+    <span class="fw-bold" id="cant-tickets">0 tickets</span>
+    <span class="fw-bold">Total: <span class="text-celeste-o" id="total-tickets">$0</span></span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0" style="font-size:.9rem">
+      <thead>
+        <tr>
+          <th style="width:110px">Ticket Nº</th>
+          <th style="width:70px">Hora</th>
+          <th>Detalle</th>
+          <th style="width:120px">Pago</th>
+          <th class="text-end" style="width:120px">Total</th>
+          <th class="text-center" style="width:130px"></th>
+        </tr>
+      </thead>
+      <tbody id="tbody-tickets">
+        <tr><td colspan="6" class="text-center text-muted py-4">Cargando…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const fmt = n => Number(n || 0).toLocaleString("es-AR");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function cargarTickets() {
+  const d = await (await fetch("/api/tickets")).json();
+  document.getElementById("cant-tickets").textContent = `${d.tickets.length} ticket${d.tickets.length === 1 ? "" : "s"}`;
+  document.getElementById("total-tickets").textContent = "$" + fmt(d.total);
+  document.getElementById("tbody-tickets").innerHTML = d.tickets.length ? d.tickets.map(t => {
+    const detalle = t.items.map(i => `${i.cantidad} × ${esc(i.producto_nombre)}`).join("<br>");
+    return `<tr>
+      <td class="font-monospace fw-bold">${String(t.numero).padStart(6, "0")}</td>
+      <td>${esc(t.hora)}</td>
+      <td class="small">${detalle}</td>
+      <td>${esc(t.forma_pago_txt)}</td>
+      <td class="text-end fw-bold">$${fmt(t.total)}</td>
+      <td class="text-center">
+        <button class="btn btn-sm btn-celeste" onclick="reimprimir(${t.numero})">
+          <i class="bi bi-printer me-1"></i>Reimprimir
+        </button>
+      </td>
+    </tr>`;
+  }).join("") : '<tr><td colspan="6" class="text-center text-muted py-4">Todavía no hay tickets hoy</td></tr>';
+}
+
+function reimprimir(numero) {
+  // Se abre como ventana para que imprima sola (igual que al confirmar la venta)
+  const w = window.open(`/ticket/${numero}`, "_blank", "width=420,height=760");
+  if (!w) window.location.href = `/ticket/${numero}`;
+}
+
+document.addEventListener("DOMContentLoaded", cargarTickets);
+</script>
+{% endblock %}
