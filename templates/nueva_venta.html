@@ -433,21 +433,34 @@ async function confirmarVenta() {
   btn.disabled = true;
   btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Guardando…';
 
+  // Se abre la ventana del ticket ya (al hacer clic) para que el navegador no la bloquee
+  const ventanaTicket = window.open("", "_blank", "width=420,height=760");
+  if (ventanaTicket) ventanaTicket.document.write("<p style='font-family:sans-serif;padding:20px'>Generando ticket…</p>");
+
   try {
+    const efectivo_recibido = formaPago === "efectivo" ? (parseFloat(document.getElementById("efectivo-input").value) || 0) : 0;
     const res = await fetch("/api/ventas", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, fecha, forma_pago: formaPago, notas })
+      body: JSON.stringify({ items, fecha, forma_pago: formaPago, notas, efectivo_recibido })
     });
     if (!res.ok) throw new Error("Error al guardar");
+    const data = await res.json();
+
+    // Mostrar e imprimir el ticket
+    if (data.ticket) {
+      if (ventanaTicket) ventanaTicket.location.href = `/ticket/${data.ticket}`;
+      else window.open(`/ticket/${data.ticket}`, "_blank");
+    } else if (ventanaTicket) ventanaTicket.close();
 
     // Éxito → mostrar confirmación y limpiar
-    mostrarConfirmacion();
+    mostrarConfirmacion(data.ticket);
     ticketItems = [];
     document.getElementById("efectivo-input").value = "";
     document.getElementById("ticket-notas").value = "";
     renderTicket();
   } catch (e) {
+    if (ventanaTicket) ventanaTicket.close();
     alert("Error al registrar la venta. Reintentá.");
   } finally {
     btn.disabled = false;
@@ -455,14 +468,17 @@ async function confirmarVenta() {
   }
 }
 
-function mostrarConfirmacion() {
+function mostrarConfirmacion(nroTicket) {
   const total = ticketItems.reduce((s, i) => s + i.precio * i.cantidad, 0);
   const toast = document.createElement("div");
   toast.className = "position-fixed bottom-0 end-0 m-3 p-3 rounded-3 text-white fw-bold shadow";
   toast.style.cssText = "background:var(--celeste);z-index:9999;font-size:1rem;";
-  toast.innerHTML = `<i class="bi bi-check-circle-fill me-2"></i>Venta registrada — $${total.toLocaleString("es-AR")}`;
+  const link = nroTicket
+    ? ` · <a href="/ticket/${nroTicket}" target="_blank" class="text-white">Ticket Nº ${String(nroTicket).padStart(6, "0")}</a>`
+    : "";
+  toast.innerHTML = `<i class="bi bi-check-circle-fill me-2"></i>Venta registrada — $${total.toLocaleString("es-AR")}${link}`;
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
+  setTimeout(() => toast.remove(), 6000);
 }
 </script>
 {% endblock %}

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Ticket Nº {{ '%06d'|format(ticket.numero) }}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+
+    /* ── Pantalla ── */
+    body {
+      font-family: 'Courier New', monospace;
+      font-size: 15px;
+      font-weight: bold;
+      color: #000;
+      background: #e0e0e0;
+    }
+    .ticket-wrap {
+      width: 72mm;
+      margin: 0 auto;
+      background: #fff;
+      padding: 3mm 2mm;
+    }
+
+    /* ── Encabezado ── */
+    .header { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 5px; margin-bottom: 5px; }
+    .header .empresa   { font-size: 17px; font-weight: bold; text-transform: uppercase; line-height: 1.4; }
+    .header .direccion { font-size: 14px; margin-top: 3px; }
+    .header .wsp       { font-size: 14px; }
+
+    /* ── Nro ticket ── */
+    .nro-ticket { font-size: 18px; font-weight: bold; text-align: center; margin: 4px 0 6px; letter-spacing: 2px; }
+
+    /* ── Datos ── */
+    .datos { margin-bottom: 5px; }
+    .datos .linea { display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 14px; }
+    .datos .lbl   { color: #444; }
+
+    /* ── Separador ── */
+    .sep { border: none; border-top: 1px dashed #000; margin: 5px 0; }
+
+    /* ── Notas ── */
+    .cliente { margin-bottom: 5px; font-size: 14px; line-height: 1.5; }
+
+    /* ── Tabla items ── */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; border-bottom: 1px solid #000; padding: 3px 0; font-size: 12px; }
+    td { padding: 3px 0; vertical-align: top; }
+    .r { text-align: right; }
+    .desc    { font-weight: bold; font-size: 14px; }
+    .detalle { color: #555; font-size: 12px; }
+
+    /* ── Total ── */
+    .total-row   { border-top: 1px dashed #000; margin-top: 6px; padding-top: 6px; }
+    .total-label { font-size: 16px; font-weight: bold; }
+    .total-monto { font-size: 22px; font-weight: bold; text-align: right; }
+
+    /* ── Pie ── */
+    .pie { text-align: center; font-size: 13px; color: #444; margin-top: 8px; border-top: 1px dashed #000; padding-top: 5px; }
+
+    /* ── Panel de impresión ── */
+    .panel-print {
+      width: 340px; margin: 16px auto 0;
+      font-family: 'Segoe UI', sans-serif; font-size: 13px;
+      background: #fff; border: 1px solid #dee2e6;
+      border-radius: 10px; overflow: hidden;
+    }
+    .panel-header {
+      background: #2790C0; color: #fff; padding: 10px 16px;
+      font-size: 14px; font-weight: 600;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .panel-body { padding: 14px 16px; }
+    .imp-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px; border: 1px solid #dee2e6;
+      border-radius: 7px; margin-bottom: 8px; cursor: pointer;
+      transition: background .15s;
+    }
+    .imp-row:hover { background: #EBF6FD; border-color: #2790C0; }
+    .imp-row.seleccionada { background: #EBF6FD; border-color: #2790C0; border-width: 2px; }
+    .imp-icon { font-size: 22px; }
+    .imp-nombre { font-weight: 600; font-size: 13px; color: #212529; }
+    .imp-desc { font-size: 11px; color: #6c757d; margin-top: 1px; }
+    .imp-badge {
+      margin-left: auto; font-size: 10px; padding: 2px 7px;
+      border-radius: 20px; background: #D6EFFA; color: #2790C0; font-weight: 600;
+    }
+    .tip {
+      background: #fffbeb; border: 1px solid #fcd34d;
+      border-radius: 6px; padding: 8px 11px; font-size: 11px;
+      color: #92400e; margin-bottom: 12px; line-height: 1.5;
+    }
+    .tip b { color: #78350f; }
+    .btn-row { display: flex; gap: 8px; }
+    .btn { padding: 9px 0; border: none; border-radius: 6px;
+           cursor: pointer; font-size: 13px; flex: 1; font-weight: 600; }
+    .btn-print { background: #2790C0; color: #fff; }
+    .btn-print:hover { background: #4AADDC; }
+    .btn-close { background: #f1f3f5; color: #495057; border: 1px solid #dee2e6; }
+    .btn-close:hover { background: #e9ecef; }
+
+    /* ── Impresión ── */
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #fff; }
+      .ticket-wrap { width: 72mm; padding: 0; margin: 0; }
+      @page {
+        size: 80mm auto;
+        margin: 2mm 3mm;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div class="no-print panel-print">
+  <div class="panel-header">
+    🖨️ Seleccionar impresora
+  </div>
+  <div class="panel-body">
+
+    <div class="tip">
+      <b>Tip:</b> Al hacer clic en <b>Imprimir</b>, Windows abre el diálogo
+      de impresión donde podés elegir la impresora. Seleccioná
+      <b>Xprinter XP-80</b> (o la térmica disponible) y
+      establecé márgenes en <b>Ninguno</b>.
+    </div>
+
+    <!-- Impresora térmica -->
+    <div class="imp-row seleccionada" id="rowTermica" onclick="seleccionar('termica')">
+      <span class="imp-icon">🧾</span>
+      <div>
+        <div class="imp-nombre">Xprinter XP-80 · Térmica 80mm</div>
+        <div class="imp-desc">Ticket de 72mm · Sin márgenes · Recomendada</div>
+      </div>
+      <span class="imp-badge">✓ Recomendada</span>
+    </div>
+
+    <!-- Impresora normal -->
+    <div class="imp-row" id="rowNormal" onclick="seleccionar('normal')">
+      <span class="imp-icon">🖨️</span>
+      <div>
+        <div class="imp-nombre">Otra impresora</div>
+        <div class="imp-desc">Impresora de oficina / PDF</div>
+      </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn btn-print" onclick="imprimir()">🖨️ Imprimir</button>
+      <button class="btn btn-close" onclick="window.close()">✕ Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div class="ticket-wrap">
+
+  <!-- ENCABEZADO -->
+  <div class="header">
+    <div class="empresa">Complejo Doble AA</div>
+    <div class="direccion">Calle Ernesto M. Parada (Ex 104) Nº 2734</div>
+    <div class="wsp">WhatsApp: 1127471538</div>
+  </div>
+
+  <!-- NÚMERO DE TICKET -->
+  <div class="nro-ticket">TICKET Nº {{ '%06d'|format(ticket.numero) }}</div>
+
+  <!-- DATOS -->
+  <div class="datos">
+    <div class="linea">
+      <span class="lbl">Fecha:</span>
+      <span>{{ ticket.fecha_ar }}</span>
+    </div>
+    <div class="linea">
+      <span class="lbl">Hora:</span>
+      <span>{{ ticket.hora }}</span>
+    </div>
+  </div>
+
+  {% if ticket.notas %}
+  <hr class="sep">
+  <div class="cliente">{{ ticket.notas }}</div>
+  {% endif %}
+
+  <hr class="sep">
+
+  <!-- ITEMS -->
+  <table>
+    <thead>
+      <tr>
+        <th style="width:44%">Descripción</th>
+        <th style="width:10%" class="r">Ct</th>
+        <th style="width:21%" class="r">Precio</th>
+        <th style="width:25%" class="r">Subtotal</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td>
+          <div class="desc">{{ item.producto_nombre }}</div>
+          {% if item.producto_id %}<div class="detalle">{{ '%06d'|format(item.producto_id) }}</div>{% endif %}
+        </td>
+        <td class="r">{{ item.cantidad }}</td>
+        <td class="r">${{ item.precio_unitario|ar }}</td>
+        <td class="r"><strong>${{ item.total|ar }}</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- FORMA DE PAGO -->
+  <div style="margin:6px 0;font-size:14px;display:flex;justify-content:space-between">
+    <span style="color:#444">Pago:</span>
+    <span><strong>{{ ticket.forma_pago_txt }}</strong></span>
+  </div>
+  {% if ticket.forma_pago == 'efectivo' and ticket.efectivo_recibido and ticket.efectivo_recibido > 0 %}
+  <div style="font-size:13px;color:#555;text-align:right">
+    Recibido: ${{ ticket.efectivo_recibido|ar }}{% if ticket.vuelto > 0 %} / Vuelto: ${{ ticket.vuelto|ar }}{% endif %}
+  </div>
+  {% endif %}
+
+  <!-- TOTAL -->
+  <div class="total-row">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <span class="total-label">TOTAL</span>
+      <span class="total-monto">${{ ticket.total|ar }}</span>
+    </div>
+  </div>
+
+  <!-- PIE -->
+  <div class="pie">
+    ¡Gracias por su compra!<br>
+    Ticket Nº {{ '%06d'|format(ticket.numero) }} — {{ ticket.fecha_ar }} {{ ticket.hora }}
+  </div>
+
+</div>
+
+<script>
+  var modoImpresion = 'termica';
+
+  function seleccionar(modo) {
+    modoImpresion = modo;
+    document.getElementById('rowTermica').classList.toggle('seleccionada', modo === 'termica');
+    document.getElementById('rowNormal').classList.toggle('seleccionada', modo === 'normal');
+  }
+
+  function imprimir() {
+    window.print();
+  }
+
+  // Si se abre al confirmar la venta, imprimir automáticamente
+  if (window.opener) {
+    window.onload = () => setTimeout(() => window.print(), 800);
+  }
+</script>
+</body>
+</html>
