@@ -887,6 +887,40 @@ async def resumen_caja(fecha: str = None):
         "total_dia": (canchas.get("cobrado") or 0) + (bufet.get("total_bufet") or 0)
     }
 
+# ─── Arqueo de billetes (conteo del efectivo en caja, uno por día) ───
+DENOMINACIONES = [20000, 10000, 5000, 2000, 1000, 500, 200, 100, 50]
+
+@app.get("/api/arqueo")
+async def get_arqueo(fecha: str):
+    db = await get_db()
+    try:
+        async with db.execute("SELECT valor FROM configuracion WHERE clave=?", (f"arqueo_{fecha}",)) as cur:
+            row = await cur.fetchone()
+    finally:
+        await db.close()
+    try:
+        conteo = json.loads(row["valor"]) if row else {}
+    except Exception:
+        conteo = {}
+    return {"fecha": fecha, "denominaciones": DENOMINACIONES,
+            "conteo": {str(d): int(conteo.get(str(d), 0) or 0) for d in DENOMINACIONES}}
+
+@app.post("/api/arqueo")
+async def guardar_arqueo(request: Request):
+    data = await request.json()
+    fecha = data.get("fecha") or ahora_ar().date().isoformat()
+    conteo = {str(d): max(0, int(_num((data.get("conteo") or {}).get(str(d))))) for d in DENOMINACIONES}
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO configuracion (clave, valor) VALUES (?,?) ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor",
+            (f"arqueo_{fecha}", json.dumps(conteo))
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"ok": True, "total": sum(int(k) * v for k, v in conteo.items())}
+
 @app.get("/api/mp/ingresos")
 async def mp_ingresos(fecha: str = None):
     """Consulta pagos aprobados del día directamente en MercadoPago."""
