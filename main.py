@@ -21,6 +21,91 @@ CANCHAS = [1, 2]
 @app.on_event("startup")
 async def startup():
     await init_db()
+    if os.getenv("RAILWAY_ENVIRONMENT"):
+        threading.Thread(target=_hilo_backups, daemon=True, name="backups").start()
+
+# ─── Copias automáticas ───────────────────────────────────────────────────────
+# 1) Cada hora: copia en el volumen (/data/backups/auto), se conservan las últimas 24.
+# 2) Todos los días a las 03:00 (hora Argentina): copia a Google Drive, carpeta
+#    "BKP Complejo Doble AA". Variables: BACKUP_DRIVE_URL y BACKUP_DRIVE_KEY.
+import threading, sqlite3, glob, base64, tempfile, time, logging
+from database import DB_PATH
+
+AUTO_BKP_DIR = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "backups", "auto")
+AUTO_BKP_CONSERVAR = 24
+_estado_bkp = {"ultima_local": None, "ultima_drive": None, "error_drive": None}
+
+def _copia_sqlite(destino: str):
+    src = sqlite3.connect(DB_PATH); dst = sqlite3.connect(destino)
+    src.backup(dst); src.close(); dst.close()
+
+def backup_local_auto():
+    os.makedirs(AUTO_BKP_DIR, exist_ok=True)
+    ts = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d_%H-%M")
+    _copia_sqlite(os.path.join(AUTO_BKP_DIR, f"doble_aa_{ts}.db"))
+    viejos = sorted(glob.glob(os.path.join(AUTO_BKP_DIR, "doble_aa_*.db")))
+    while len(viejos) > AUTO_BKP_CONSERVAR:
+        os.remove(viejos.pop(0))
+    _estado_bkp["ultima_local"] = ts
+
+def backup_a_drive():
+    """Envía una copia de la base a Google Drive. Devuelve (ok, detalle)."""
+    import httpx
+    url = os.getenv("BACKUP_DRIVE_URL", "").strip()
+    clave = os.getenv("BACKUP_DRIVE_KEY", "").strip()
+    if not url or not clave:
+        return False, "Falta configurar BACKUP_DRIVE_URL / BACKUP_DRIVE_KEY"
+    ts = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d_%H-%M")
+    tmp = os.path.join(tempfile.gettempdir(), f"complejo_{ts}.db")
+    try:
+        _copia_sqlite(tmp)
+        with open(tmp, "rb") as f:
+            datos = base64.b64encode(f.read()).decode()
+        r = httpx.post(url, json={"clave": clave, "sistema": "complejo",
+                                  "nombre": f"complejo_doble_aa_{ts}.db", "datos": datos},
+                       follow_redirects=True, timeout=120)
+        resp = r.json()
+        if resp.get("ok"):
+            _estado_bkp.update(ultima_drive=ts, error_drive=None)
+            return True, resp.get("archivo", "")
+        _estado_bkp["error_drive"] = resp.get("error", "respuesta inválida")
+        return False, _estado_bkp["error_drive"]
+    except Exception as e:
+        _estado_bkp["error_drive"] = str(e)
+        return False, str(e)
+    finally:
+        try: os.remove(tmp)
+        except Exception: pass
+
+def _hilo_backups():
+    ultima_hora, ultimo_dia_drive = None, None
+    while True:
+        ahora = datetime.now(timezone(timedelta(hours=-3)))
+        try:
+            hora = ahora.strftime("%Y-%m-%d %H")
+            if hora != ultima_hora:
+                backup_local_auto(); ultima_hora = hora
+            hoy = ahora.strftime("%Y-%m-%d")
+            if ahora.hour >= 3 and ultimo_dia_drive != hoy:
+                ok, det = backup_a_drive()
+                logging.warning("Backup a Drive: %s %s", ok, det)
+                ultimo_dia_drive = hoy
+        except Exception as e:
+            logging.error("Error en backup automático: %s", e)
+        time.sleep(300)
+
+@app.post("/api/backup/drive")
+async def api_backup_drive():
+    """Manda ahora una copia a Google Drive."""
+    import asyncio
+    ok, det = await asyncio.to_thread(backup_a_drive)
+    return {"ok": ok, "detalle": det, "estado": _estado_bkp}
+
+@app.get("/api/backup/estado")
+async def api_backup_estado():
+    archivos = sorted(glob.glob(os.path.join(AUTO_BKP_DIR, "doble_aa_*.db")))
+    return {**_estado_bkp, "copias_locales": len(archivos),
+            "ultima_copia_local": os.path.basename(archivos[-1]) if archivos else None}
 
 # ─────────────────────────── PÁGINAS ───────────────────────────
 
