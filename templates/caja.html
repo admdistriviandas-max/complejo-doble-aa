@@ -6,45 +6,21 @@
   <input type="date" class="form-control form-control-sm" id="fecha-caja" style="width:160px"/>
 </div>
 
-<!-- Widget MP Real -->
-<div class="row g-3 mb-3">
-  <div class="col-12 col-md-4">
-    <div class="card p-3 text-center" id="card-mp" style="border-left:4px solid #009EE3">
-      <div class="small text-muted mb-1" style="letter-spacing:.5px;text-transform:uppercase;font-size:.72rem">
-        <img src="https://http2.mlstatic.com/frontend-assets/mp-melidata/main.3.27.3.js" onerror="this.style.display='none'" style="height:14px;margin-right:4px"/>
-        MP Real
-      </div>
-      <div class="fw-bold" style="font-size:1.7rem;color:#009EE3" id="mp-total">—</div>
-      <div class="small text-muted" id="mp-detalle">cargando…</div>
-      <button class="btn btn-sm btn-outline-secondary mt-2 py-0" style="font-size:.72rem" onclick="cargarMP()">
-        <i class="bi bi-arrow-clockwise me-1"></i>Actualizar
-      </button>
-    </div>
-  </div>
-</div>
+<!-- Totales por forma de pago -->
+<div class="row g-3 mb-3" id="cards-pago"></div>
 
 <!-- Resumen del día -->
 <div class="row g-3 mb-4" id="cards-dia"></div>
 
 <!-- Detalle reservas del día -->
 <div class="row g-3">
-  <div class="col-lg-7">
+  <div class="col-12">
     <div class="card p-3">
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <h6 class="fw-bold mb-0"><i class="bi bi-calendar-check me-1"></i>Canchas del día</h6>
         <div id="resumen-canchas" class="small"></div>
       </div>
       <div id="detalle-reservas"></div>
-    </div>
-  </div>
-  <div class="col-lg-5">
-    <div class="card p-3 mb-3">
-      <h6 class="fw-bold mb-2"><i class="bi bi-bar-chart me-1"></i>Top productos bufet</h6>
-      <div id="top-productos"></div>
-    </div>
-    <div class="card p-3">
-      <h6 class="fw-bold mb-2"><i class="bi bi-graph-up me-1"></i>Resumen semanal</h6>
-      <div id="resumen-semanal"></div>
     </div>
   </div>
 </div>
@@ -59,10 +35,30 @@ document.addEventListener("DOMContentLoaded", () => {
   const h = new Date();  // fecha local (no UTC: de noche en Argentina ya sería "mañana")
   const hoy = `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,"0")}-${String(h.getDate()).padStart(2,"0")}`;
   document.getElementById("fecha-caja").value = hoy;
-  document.getElementById("fecha-caja").addEventListener("change", () => { cargarCaja(); cargarMP(); });
+  document.getElementById("fecha-caja").addEventListener("change", cargarCaja);
   cargarCaja();
-  cargarMP();
 });
+
+function renderPagos(p) {
+  p = p || {};
+  const detMP = [p.transferencia ? `Transferencia $${fmt(p.transferencia)}` : "", p.debito ? `Débito $${fmt(p.debito)}` : ""]
+    .filter(Boolean).join(" · ") || "Transferencia y débito";
+  document.getElementById("cards-pago").innerHTML = `
+    <div class="col-6">
+      <div class="card p-3 text-center" style="border-left:4px solid #009EE3">
+        <div class="small text-muted text-uppercase" style="letter-spacing:.5px;font-size:.72rem">Total MP</div>
+        <div class="fw-bold" style="font-size:1.9rem;color:#009EE3">$${fmt(p.mp)}</div>
+        <div class="small text-muted">${detMP}</div>
+      </div>
+    </div>
+    <div class="col-6">
+      <div class="card p-3 text-center" style="border-left:4px solid #198754">
+        <div class="small text-muted text-uppercase" style="letter-spacing:.5px;font-size:.72rem">Total Efectivo</div>
+        <div class="fw-bold text-success" style="font-size:1.9rem">$${fmt(p.efectivo)}</div>
+        <div class="small text-muted">Ventas cobradas en efectivo</div>
+      </div>
+    </div>`;
+}
 
 async function cargarMP() {
   const fecha = document.getElementById("fecha-caja").value;
@@ -89,10 +85,9 @@ async function cargarCaja() {
   const fecha = document.getElementById("fecha-caja").value;
   const res = await fetch(`/api/caja?fecha=${fecha}`);
   const data = await res.json();
+  renderPagos(data.pagos);
   renderCards(data);
   renderReservas(data, fecha);
-  renderTopProductos(data.top_productos);
-  cargarSemanal(fecha);
 }
 
 function fmt(n) { return Number(n||0).toLocaleString("es-AR"); }
@@ -100,25 +95,19 @@ function fmt(n) { return Number(n||0).toLocaleString("es-AR"); }
 function renderCards(d) {
   const c = d.canchas, b = d.bufet;
   document.getElementById("cards-dia").innerHTML = `
-    <div class="col-6 col-md-3">
+    <div class="col-6 col-md-4">
       <div class="card p-3 text-center">
         <div class="fs-2 fw-bold text-celeste-o">$${fmt(c.cobrado)}</div>
         <div class="small text-muted">Cobrado canchas</div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center">
-        <div class="fs-2 fw-bold text-warning">${c.seniados||0}</div>
-        <div class="small text-muted">Turnos señados</div>
-      </div>
-    </div>
-    <div class="col-6 col-md-3">
+    <div class="col-6 col-md-4">
       <div class="card p-3 text-center">
         <div class="fs-2 fw-bold text-celeste-o">$${fmt(b.total_bufet)}</div>
         <div class="small text-muted">Ingresos bufet</div>
       </div>
     </div>
-    <div class="col-6 col-md-3">
+    <div class="col-12 col-md-4">
       <div class="total-highlight text-center">
         <div class="fs-2 fw-bold">$${fmt(d.total_dia)}</div>
         <div class="small opacity-75">Total del día</div>
