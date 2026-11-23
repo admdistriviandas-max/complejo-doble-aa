@@ -534,7 +534,18 @@ async def registrar_venta(request: Request):
                    VALUES (?,?,?,?,?,?,?)""",
                 (fecha, pid, nombre, qty, precio, total, ticket_numero)
             )
-        await db.execute("UPDATE tickets SET total=? WHERE numero=?", (total_ticket, ticket_numero))
+        # Cuánto entra en efectivo y cuánto por transferencia
+        if forma_pago == "mixto":
+            m_ef = min(max(_num(data.get("monto_efectivo")), 0), total_ticket)
+            m_tr = total_ticket - m_ef
+        elif forma_pago == "efectivo":
+            m_ef, m_tr = total_ticket, 0
+        else:   # transferencia (o débito de tickets viejos)
+            m_ef, m_tr = 0, total_ticket
+        await db.execute(
+            "UPDATE tickets SET total=?, monto_efectivo=?, monto_transferencia=? WHERE numero=?",
+            (total_ticket, m_ef, m_tr, ticket_numero)
+        )
         await db.commit()
     finally:
         await db.close()
@@ -550,7 +561,7 @@ def _fmt_ar(n) -> str:
 
 templates.env.filters["ar"] = _fmt_ar
 
-FORMAS_PAGO = {"efectivo": "Efectivo", "transferencia": "Transferencia", "debito": "Débito"}
+FORMAS_PAGO = {"efectivo": "Efectivo", "transferencia": "Transferencia", "mixto": "Mixto", "debito": "Débito"}
 
 @app.get("/tickets", response_class=HTMLResponse)
 async def tickets_page(request: Request):
@@ -828,15 +839,13 @@ async def resumen_caja(fecha: str = None):
         ) as cur:
             bufet = dict(await cur.fetchone())
 
-        # Lo facturado en el día separado por forma de pago (según los tickets)
+        # Lo facturado en el día separado en efectivo y transferencia (los mixtos se reparten)
         async with db.execute(
-            "SELECT forma_pago, SUM(total) AS total, COUNT(*) AS tickets FROM tickets WHERE fecha=? GROUP BY forma_pago",
+            "SELECT COALESCE(SUM(monto_efectivo),0), COALESCE(SUM(monto_transferencia),0), "
+            "COALESCE(SUM(CASE WHEN forma_pago='mixto' THEN 1 ELSE 0 END),0) FROM tickets WHERE fecha=?",
             (fecha,)
         ) as cur:
-            por_pago = {r["forma_pago"]: {"total": r["total"] or 0, "tickets": r["tickets"]} for r in await cur.fetchall()}
-        efectivo = por_pago.get("efectivo", {}).get("total", 0)
-        transferencia = por_pago.get("transferencia", {}).get("total", 0)
-        debito = por_pago.get("debito", {}).get("total", 0)
+            efectivo, transferencia, mixtos = await cur.fetchone()
 
         # Pendiente de cobro de los turnos señados del día
         # (no se suman semanas futuras: los turnos fijos las generan solas y inflarían el número)
@@ -866,8 +875,8 @@ async def resumen_caja(fecha: str = None):
         "bufet": bufet,
         "pendiente_cobro": pendiente,
         "top_productos": top_productos,
-        "pagos": {"efectivo": efectivo, "transferencia": transferencia, "debito": debito,
-                  "mp": transferencia + debito},
+        "pagos": {"efectivo": efectivo, "transferencia": transferencia, "mp": transferencia,
+                  "mixtos": mixtos},
         "total_dia": (canchas.get("cobrado") or 0) + (bufet.get("total_bufet") or 0)
     }
 

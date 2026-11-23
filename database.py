@@ -162,6 +162,13 @@ async def init_db():
         if "ticket_numero" not in cols_v:
             await db.execute("ALTER TABLE ventas_bufet ADD COLUMN ticket_numero INTEGER")
             await db.commit()
+        # Migración: cuánto de cada ticket se cobró en efectivo y cuánto por transferencia
+        async with db.execute("PRAGMA table_info(tickets)") as cur:
+            cols_t = [r[1] for r in await cur.fetchall()]
+        for col in ("monto_efectivo", "monto_transferencia"):
+            if col not in cols_t:
+                await db.execute(f"ALTER TABLE tickets ADD COLUMN {col} REAL DEFAULT 0")
+        await db.commit()
         # Productos de ejemplo si la tabla está vacía
         async with db.execute("SELECT COUNT(*) FROM productos") as cur:
             count = (await cur.fetchone())[0]
