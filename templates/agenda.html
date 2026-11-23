@@ -67,6 +67,15 @@
             <label class="form-label fw-semibold">Notas</label>
             <textarea class="form-control" id="r-notas" rows="2" placeholder="Observaciones..."></textarea>
           </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" role="switch" id="r-fijo"/>
+              <label class="form-check-label fw-semibold" for="r-fijo">
+                <i class="bi bi-arrow-repeat me-1"></i><span id="r-fijo-label">Turno fijo (todas las semanas)</span>
+              </label>
+            </div>
+            <div class="form-text" id="r-fijo-ayuda">Se reserva solo, como "Señado", el mismo día y hora todas las semanas.</div>
+          </div>
         </div>
       </div>
       <div class="modal-footer border-0">
@@ -122,7 +131,8 @@ async function cargarAgenda() {
   reservasCache = {};
   for (const r of data.reservas) {
     const key = `${r.fecha}_${r.hora}_${r.cancha}`;
-    reservasCache[key] = r;
+    // Si hay una cancelada y otra activa en el mismo turno, mostrar la activa
+    if (!reservasCache[key] || reservasCache[key].estado === 'cancelado') reservasCache[key] = r;
   }
   renderGrid(data.dias);
 }
@@ -164,7 +174,7 @@ function renderGrid(dias) {
           const estado = r.estado;
           html += `<td class="p-1">
             <div class="turno-card turno-${estado}" onclick="abrirModal('${fecha}','${hora}',${cancha})">
-              <div class="fw-semibold">${r.cliente_nombre}</div>
+              <div class="fw-semibold">${r.es_fijo ? '<i class="bi bi-arrow-repeat me-1" title="Turno fijo"></i>' : ''}${r.cliente_nombre}</div>
               <div class="d-flex justify-content-between mt-1">
                 <span class="badge badge-${estado}">${labelEstado(estado)}</span>
                 ${r.monto_senia > 0 ? `<span class="text-muted">Seña $${fmt(r.monto_senia)}</span>` : ''}
@@ -211,7 +221,16 @@ function abrirModal(fecha, hora, cancha) {
     document.getElementById("r-cobrado").value = r.monto_pagado || "";
     document.getElementById("r-notas").value = r.notas || "";
     document.getElementById("btn-cancelar-reserva").style.display = "";
+    document.getElementById("r-fijo").checked = !!r.es_fijo;
+    document.getElementById("r-fijo").dataset.original = r.es_fijo ? "1" : "0";
+    document.getElementById("r-fijo-ayuda").textContent = r.es_fijo
+      ? "Si lo desactivás, este turno se mantiene y se liberan las semanas siguientes."
+      : 'Se reserva solo, como "Señado", el mismo día y hora todas las semanas.';
   } else {
+    document.getElementById("r-fijo").checked = false;
+    document.getElementById("r-fijo").dataset.original = "0";
+    document.getElementById("r-fijo-ayuda").textContent =
+      'Se reserva solo, como "Señado", el mismo día y hora todas las semanas.';
     document.getElementById("r-id").value = "";
     document.getElementById("r-nombre").value = "";
     document.getElementById("r-estado").value = "señado";
@@ -235,9 +254,13 @@ async function guardarReserva() {
     monto_total: document.getElementById("r-total").value || 0,
     monto_senia: document.getElementById("r-senia").value || 0,
     monto_pagado: document.getElementById("r-cobrado").value || 0,
-    notas: document.getElementById("r-notas").value
+    notas: document.getElementById("r-notas").value,
+    turno_fijo: document.getElementById("r-fijo").checked
   };
   if (!body.cliente_nombre) { alert("Ingresá el nombre del cliente"); return; }
+  const fijoOriginal = document.getElementById("r-fijo").dataset.original === "1";
+  if (id && fijoOriginal && !body.turno_fijo &&
+      !confirm("¿Quitar el turno fijo? Se liberan las semanas siguientes.")) return;
 
   let url = "/api/reservas", method = "POST";
   if (id) { url = `/api/reservas/${id}`; method = "PUT"; }
