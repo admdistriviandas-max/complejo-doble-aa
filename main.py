@@ -761,6 +761,9 @@ async def logout(request: Request, response: Response):
 
 # ─────────────────────────── API CAJA / REPORTES ───────────────────────────
 
+# Ítem vendido que es un cobro de cancha (producto del rubro CANCHA)
+ES_CANCHA = ("UPPER(COALESCE((SELECT p.categoria FROM productos p WHERE p.id = v.producto_id), '')) = 'CANCHA'")
+
 @app.get("/api/caja")
 async def resumen_caja(fecha: str = None):
     if not fecha:
@@ -780,13 +783,32 @@ async def resumen_caja(fecha: str = None):
         ) as cur:
             canchas = dict(await cur.fetchone())
 
-        # Ingresos bufet del día
+        # Lo facturado con productos del rubro CANCHA (CANCHA, SEÑA CANCHA) va a canchas
         async with db.execute(
-            """SELECT COUNT(*) as total_ventas, SUM(total) as total_bufet,
-               SUM(cantidad) as total_items FROM ventas_bufet WHERE fecha=?""",
+            f"SELECT SUM(total) FROM ventas_bufet v WHERE fecha=? AND {ES_CANCHA}", (fecha,)
+        ) as cur:
+            ventas_cancha = (await cur.fetchone())[0] or 0
+        canchas["cobrado_reservas"] = canchas.get("cobrado") or 0
+        canchas["cobrado_ventas"] = ventas_cancha
+        canchas["cobrado"] = canchas["cobrado_reservas"] + ventas_cancha
+
+        # Ingresos bufet del día (sin los cobros de cancha)
+        async with db.execute(
+            f"""SELECT COUNT(*) as total_ventas, SUM(total) as total_bufet,
+               SUM(cantidad) as total_items FROM ventas_bufet v WHERE fecha=? AND NOT {ES_CANCHA}""",
             (fecha,)
         ) as cur:
             bufet = dict(await cur.fetchone())
+
+        # Lo facturado en el día separado por forma de pago (según los tickets)
+        async with db.execute(
+            "SELECT forma_pago, SUM(total) AS total, COUNT(*) AS tickets FROM tickets WHERE fecha=? GROUP BY forma_pago",
+            (fecha,)
+        ) as cur:
+            por_pago = {r["forma_pago"]: {"total": r["total"] or 0, "tickets": r["tickets"]} for r in await cur.fetchall()}
+        efectivo = por_pago.get("efectivo", {}).get("total", 0)
+        transferencia = por_pago.get("transferencia", {}).get("total", 0)
+        debito = por_pago.get("debito", {}).get("total", 0)
 
         # Pendiente de cobro de los turnos señados del día
         # (no se suman semanas futuras: los turnos fijos las generan solas y inflarían el número)
@@ -800,8 +822,8 @@ async def resumen_caja(fecha: str = None):
 
         # Top 5 productos del día
         async with db.execute(
-            """SELECT producto_nombre, SUM(cantidad) as qty, SUM(total) as total
-               FROM ventas_bufet WHERE fecha=?
+            f"""SELECT producto_nombre, SUM(cantidad) as qty, SUM(total) as total
+               FROM ventas_bufet v WHERE fecha=? AND NOT {ES_CANCHA}
                GROUP BY producto_nombre ORDER BY total DESC LIMIT 5""",
             (fecha,)
         ) as cur:
@@ -816,6 +838,8 @@ async def resumen_caja(fecha: str = None):
         "bufet": bufet,
         "pendiente_cobro": pendiente,
         "top_productos": top_productos,
+        "pagos": {"efectivo": efectivo, "transferencia": transferencia, "debito": debito,
+                  "mp": transferencia + debito},
         "total_dia": (canchas.get("cobrado") or 0) + (bufet.get("total_bufet") or 0)
     }
 
@@ -873,11 +897,17 @@ async def resumen_semana(desde: str, hasta: str):
             por_dia_canchas = {r["fecha"]: dict(r) for r in await cur.fetchall()}
 
         async with db.execute(
-            """SELECT fecha, SUM(total) as bufet FROM ventas_bufet
-               WHERE fecha BETWEEN ? AND ? GROUP BY fecha""",
+            f"""SELECT fecha,
+               SUM(CASE WHEN {ES_CANCHA} THEN 0 ELSE total END) as bufet,
+               SUM(CASE WHEN {ES_CANCHA} THEN total ELSE 0 END) as cancha_ventas
+               FROM ventas_bufet v WHERE fecha BETWEEN ? AND ? GROUP BY fecha""",
             (desde, hasta)
         ) as cur:
-            por_dia_bufet = {r["fecha"]: r["bufet"] for r in await cur.fetchall()}
+            filas_v = [dict(r) for r in await cur.fetchall()]
+        por_dia_bufet = {r["fecha"]: r["bufet"] for r in filas_v}
+        for r in filas_v:   # los cobros de cancha facturados suman a canchas
+            d = por_dia_canchas.setdefault(r["fecha"], {"fecha": r["fecha"], "canchas": 0, "reservas": 0})
+            d["canchas"] = (d.get("canchas") or 0) + (r["cancha_ventas"] or 0)
 
     finally:
         await db.close()
