@@ -552,6 +552,34 @@ templates.env.filters["ar"] = _fmt_ar
 
 FORMAS_PAGO = {"efectivo": "Efectivo", "transferencia": "Transferencia", "debito": "Débito"}
 
+@app.get("/tickets", response_class=HTMLResponse)
+async def tickets_page(request: Request):
+    hoy = ahora_ar().date()
+    return templates.TemplateResponse("tickets.html", {
+        "request": request, "fecha": hoy.isoformat(), "fecha_ar": hoy.strftime("%d/%m/%Y")
+    })
+
+@app.get("/api/tickets")
+async def tickets_del_dia():
+    """Tickets emitidos hoy (hora Argentina), del más nuevo al más viejo."""
+    fecha = ahora_ar().date().isoformat()
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT * FROM tickets WHERE fecha=? ORDER BY numero DESC", (fecha,)
+        ) as cur:
+            tickets = [dict(r) for r in await cur.fetchall()]
+        for t in tickets:
+            async with db.execute(
+                "SELECT producto_nombre, cantidad FROM ventas_bufet WHERE ticket_numero=? ORDER BY id",
+                (t["numero"],)
+            ) as cur:
+                t["items"] = [dict(r) for r in await cur.fetchall()]
+            t["forma_pago_txt"] = FORMAS_PAGO.get(t["forma_pago"], (t["forma_pago"] or "").capitalize())
+    finally:
+        await db.close()
+    return {"fecha": fecha, "tickets": tickets, "total": sum(t["total"] or 0 for t in tickets)}
+
 @app.get("/ticket/{numero}", response_class=HTMLResponse)
 async def ver_ticket(request: Request, numero: int):
     db = await get_db()
