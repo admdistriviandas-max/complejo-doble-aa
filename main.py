@@ -490,6 +490,14 @@ async def registrar_venta(request: Request):
         raise HTTPException(400, "Sin items")
     db = await get_db()
     try:
+        # Ticket que agrupa la venta (el total se completa al final)
+        cur = await db.execute(
+            "INSERT INTO tickets (fecha, hora, forma_pago, total, efectivo_recibido, notas) VALUES (?,?,?,0,?,?)",
+            (fecha, ahora_ar().strftime("%H:%M"), forma_pago,
+             _num(data.get("efectivo_recibido")), (data.get("notas") or "").strip())
+        )
+        ticket_numero = cur.lastrowid
+        total_ticket = 0.0
         for item in items:
             pid = item.get("producto_id")
             qty = int(item.get("cantidad", 1))
@@ -517,16 +525,51 @@ async def registrar_venta(request: Request):
                 nombre = nombre_custom
 
             total = precio * qty
+            total_ticket += total
             await db.execute(
                 """INSERT INTO ventas_bufet
-                   (fecha, producto_id, producto_nombre, cantidad, precio_unitario, total)
-                   VALUES (?,?,?,?,?,?)""",
-                (fecha, pid, nombre, qty, precio, total)
+                   (fecha, producto_id, producto_nombre, cantidad, precio_unitario, total, ticket_numero)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (fecha, pid, nombre, qty, precio, total, ticket_numero)
             )
+        await db.execute("UPDATE tickets SET total=? WHERE numero=?", (total_ticket, ticket_numero))
         await db.commit()
     finally:
         await db.close()
-    return {"ok": True}
+    return {"ok": True, "ticket": ticket_numero}
+
+
+def _fmt_ar(n) -> str:
+    """1234.5 -> '1.234,50'"""
+    try:
+        return f"{float(n):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (TypeError, ValueError):
+        return "0,00"
+
+templates.env.filters["ar"] = _fmt_ar
+
+FORMAS_PAGO = {"efectivo": "Efectivo", "transferencia": "Transferencia", "debito": "Débito"}
+
+@app.get("/ticket/{numero}", response_class=HTMLResponse)
+async def ver_ticket(request: Request, numero: int):
+    db = await get_db()
+    try:
+        async with db.execute("SELECT * FROM tickets WHERE numero=?", (numero,)) as cur:
+            t = await cur.fetchone()
+        if not t:
+            return HTMLResponse("<h2>Ticket no encontrado</h2>", status_code=404)
+        async with db.execute(
+            "SELECT * FROM ventas_bufet WHERE ticket_numero=? ORDER BY id", (numero,)
+        ) as cur:
+            items = [dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+    t = dict(t)
+    y, m, d = t["fecha"].split("-")
+    t["fecha_ar"] = f"{d}/{m}/{y}"
+    t["forma_pago_txt"] = FORMAS_PAGO.get(t["forma_pago"], (t["forma_pago"] or "Efectivo").capitalize())
+    t["vuelto"] = (t["efectivo_recibido"] or 0) - t["total"] if t["forma_pago"] == "efectivo" else 0
+    return templates.TemplateResponse("ticket.html", {"request": request, "ticket": t, "items": items})
 
 @app.get("/api/ventas")
 async def get_ventas(fecha: str = None):

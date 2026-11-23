@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS configuracion (
     valor TEXT NOT NULL DEFAULT ''
 );
 
+-- Tickets del bufet (agrupa los ítems de cada venta)
+CREATE TABLE IF NOT EXISTS tickets (
+    numero INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha TEXT NOT NULL,          -- YYYY-MM-DD
+    hora TEXT NOT NULL,           -- HH:MM
+    forma_pago TEXT DEFAULT 'efectivo',
+    total REAL NOT NULL DEFAULT 0,
+    efectivo_recibido REAL DEFAULT 0,
+    notas TEXT DEFAULT '',
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Turnos fijos: el mismo cliente, mismo día de la semana, misma hora y cancha, todas las semanas
 CREATE TABLE IF NOT EXISTS turnos_fijos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,6 +156,12 @@ async def init_db():
             if col not in cols_prod:
                 await db.execute(f"ALTER TABLE productos ADD COLUMN {col} {tipo}")
         await db.commit()
+        # Migración: cada ítem vendido apunta a su ticket
+        async with db.execute("PRAGMA table_info(ventas_bufet)") as cur:
+            cols_v = [r[1] for r in await cur.fetchall()]
+        if "ticket_numero" not in cols_v:
+            await db.execute("ALTER TABLE ventas_bufet ADD COLUMN ticket_numero INTEGER")
+            await db.commit()
         # Productos de ejemplo si la tabla está vacía
         async with db.execute("SELECT COUNT(*) FROM productos") as cur:
             count = (await cur.fetchone())[0]
