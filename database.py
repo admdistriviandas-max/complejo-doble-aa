@@ -168,6 +168,11 @@ async def init_db():
         for col in ("monto_efectivo", "monto_transferencia"):
             if col not in cols_t:
                 await db.execute(f"ALTER TABLE tickets ADD COLUMN {col} REAL DEFAULT 0")
+        # Tickets hechos antes del pago mixto: completar el reparto según su forma de pago
+        await db.execute("""UPDATE tickets SET monto_efectivo = total WHERE forma_pago='efectivo'
+                            AND COALESCE(monto_efectivo,0)=0 AND COALESCE(monto_transferencia,0)=0""")
+        await db.execute("""UPDATE tickets SET monto_transferencia = total WHERE forma_pago IN ('transferencia','debito')
+                            AND COALESCE(monto_efectivo,0)=0 AND COALESCE(monto_transferencia,0)=0""")
         await db.commit()
         # Productos de ejemplo si la tabla está vacía
         async with db.execute("SELECT COUNT(*) FROM productos") as cur:

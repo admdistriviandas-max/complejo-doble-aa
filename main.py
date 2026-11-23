@@ -840,9 +840,16 @@ async def resumen_caja(fecha: str = None):
             bufet = dict(await cur.fetchone())
 
         # Lo facturado en el día separado en efectivo y transferencia (los mixtos se reparten)
+        # (si un ticket no tiene el reparto guardado, se usa su forma de pago)
+        sin_reparto = "COALESCE(monto_efectivo,0)=0 AND COALESCE(monto_transferencia,0)=0"
         async with db.execute(
-            "SELECT COALESCE(SUM(monto_efectivo),0), COALESCE(SUM(monto_transferencia),0), "
-            "COALESCE(SUM(CASE WHEN forma_pago='mixto' THEN 1 ELSE 0 END),0) FROM tickets WHERE fecha=?",
+            f"""SELECT
+                 COALESCE(SUM(CASE WHEN {sin_reparto} THEN (CASE WHEN forma_pago='efectivo' THEN total ELSE 0 END)
+                                   ELSE monto_efectivo END),0),
+                 COALESCE(SUM(CASE WHEN {sin_reparto} THEN (CASE WHEN forma_pago='efectivo' THEN 0 ELSE total END)
+                                   ELSE monto_transferencia END),0),
+                 COALESCE(SUM(CASE WHEN forma_pago='mixto' THEN 1 ELSE 0 END),0)
+               FROM tickets WHERE fecha=?""",
             (fecha,)
         ) as cur:
             efectivo, transferencia, mixtos = await cur.fetchone()
