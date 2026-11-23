@@ -254,6 +254,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const hoy = new Date().toISOString().slice(0,10);
   document.getElementById("ticket-fecha").value = hoy;
   cargarProductos();
+  // Enter en el buscador: elige el primer resultado y lo agrega al ticket
+  document.getElementById("buscar-producto").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const primero = document.querySelector("#resultados-busqueda .prod-search-item");
+    const box = document.getElementById("resultados-busqueda");
+    if (!document.getElementById("producto-seleccionado-id").value && primero && box.style.display !== "none") {
+      primero.click();
+    }
+    agregarAlTicket();
+  });
+  // Enter en cantidad o precio: agrega al ticket
+  ["agregar-cantidad", "agregar-precio"].forEach(id =>
+    document.getElementById(id).addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); agregarAlTicket(); }
+    })
+  );
   document.addEventListener("click", (e) => {
     if (!e.target.closest(".prod-search-wrap")) {
       document.getElementById("resultados-busqueda").style.display = "none";
@@ -270,7 +287,9 @@ async function cargarProductos() {
 function buscarProducto(q) {
   const box = document.getElementById("resultados-busqueda");
   if (!q.trim()) { box.style.display = "none"; return; }
-  const found = productos.filter(p => p.nombre.toLowerCase().includes(q.toLowerCase()));
+  document.getElementById("producto-seleccionado-id").value = "";
+  const found = productos.filter(p => p.nombre.toLowerCase().includes(q.toLowerCase()) ||
+                                      String(p.id).padStart(6, "0").includes(q.trim()));
   if (!found.length) { box.style.display = "none"; return; }
   box.innerHTML = found.slice(0, 20).map(p =>
     `<div class="prod-search-item" onclick="seleccionarProducto(${p.id}, '${p.nombre.replace(/'/g,"\\'")}', ${p.precio})">
@@ -299,6 +318,11 @@ function agregarAlTicket() {
 
   if (!nombre) {
     document.getElementById("buscar-producto").focus();
+    return;
+  }
+  if (!(precio > 0)) {
+    alert("Elegí el producto de la lista (o escribí el precio) antes de agregarlo.");
+    document.getElementById(id ? "agregar-precio" : "buscar-producto").focus();
     return;
   }
 
@@ -450,7 +474,7 @@ async function confirmarVenta() {
     // Mostrar e imprimir el ticket
     if (data.ticket) {
       if (ventanaTicket) ventanaTicket.location.href = `/ticket/${data.ticket}`;
-      else window.open(`/ticket/${data.ticket}`, "_blank");
+      else { window.location.href = `/ticket/${data.ticket}`; return; }  // ventana bloqueada: se abre aquí mismo
     } else if (ventanaTicket) ventanaTicket.close();
 
     // Éxito → mostrar confirmación y limpiar
