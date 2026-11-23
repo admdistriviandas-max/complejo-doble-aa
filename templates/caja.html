@@ -30,7 +30,10 @@
 <div class="row g-3">
   <div class="col-lg-7">
     <div class="card p-3">
-      <h6 class="fw-bold mb-3"><i class="bi bi-calendar-check me-1"></i>Reservas del día</h6>
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h6 class="fw-bold mb-0"><i class="bi bi-calendar-check me-1"></i>Canchas del día</h6>
+        <div id="resumen-canchas" class="small"></div>
+      </div>
       <div id="detalle-reservas"></div>
     </div>
   </div>
@@ -53,7 +56,8 @@ const DIAS = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
 const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 
 document.addEventListener("DOMContentLoaded", () => {
-  const hoy = new Date().toISOString().slice(0,10);
+  const h = new Date();  // fecha local (no UTC: de noche en Argentina ya sería "mañana")
+  const hoy = `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,"0")}-${String(h.getDate()).padStart(2,"0")}`;
   document.getElementById("fecha-caja").value = hoy;
   document.getElementById("fecha-caja").addEventListener("change", () => { cargarCaja(); cargarMP(); });
   cargarCaja();
@@ -124,25 +128,53 @@ function renderCards(d) {
     <div class="col-12">
       <div class="alert alert-warning d-flex align-items-center gap-2 py-2 mb-0">
         <i class="bi bi-exclamation-triangle-fill"></i>
-        <span>Pendiente de cobro (señas): <strong>$${fmt(d.pendiente_cobro)}</strong></span>
+        <span>Pendiente de cobro de los turnos señados del día: <strong>$${fmt(d.pendiente_cobro)}</strong></span>
       </div>
     </div>` : ''}`;
 }
 
+const HORARIOS = {{ horarios | tojson }};
+const CANCHAS = {{ canchas | tojson }};
+const ESTADO_TXT = {señado:"Señado", pagado:"Pagado", no_vino:"No vino"};
+const ESTADO_COLOR = {señado:"bg-warning text-dark", pagado:"bg-success", no_vino:"bg-danger"};
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// Todas las canchas del día, hora por hora: alquiladas (con nombre) y libres
 async function renderReservas(data, fecha) {
-  const res = await fetch(`/api/agenda?semana=${fecha}`);
-  const ag = await res.json();
-  const hoyRes = ag.reservas.filter(r => r.fecha === fecha && r.estado !== 'cancelado');
-  const est = {señado:"warning",pagado:"success",no_vino:"danger"};
-  const html = hoyRes.map(r => `
-    <div class="d-flex justify-content-between align-items-center border-bottom py-2 small">
-      <span><strong>${r.hora}hs C${r.cancha}</strong> · ${r.cliente_nombre}</span>
-      <div class="d-flex gap-3 align-items-center">
-        <span class="text-muted">$${fmt(r.monto_pagado)} cobrado</span>
-        <span class="badge bg-${est[r.estado]||'secondary'}">${r.estado}</span>
-      </div>
-    </div>`).join("") || '<p class="text-muted text-center py-3">Sin reservas</p>';
+  const ag = await (await fetch(`/api/agenda?semana=${fecha}`)).json();
+  const porTurno = {};
+  for (const r of ag.reservas) {
+    if (r.fecha !== fecha || r.estado === "cancelado") continue;
+    porTurno[`${r.hora}_${r.cancha}`] = r;
+  }
+  let alquiladas = 0, libres = 0;
+  let html = `<table class="table table-sm align-middle mb-0" style="font-size:.86rem">
+    <thead><tr><th style="width:60px">Hora</th>${CANCHAS.map(c => `<th>Cancha ${c}</th>`).join("")}</tr></thead><tbody>`;
+  for (const h of HORARIOS) {
+    html += `<tr><td class="fw-bold">${h} hs</td>`;
+    for (const c of CANCHAS) {
+      const r = porTurno[`${h}_${c}`];
+      if (r) {
+        alquiladas++;
+        const cobrado = r.monto_pagado > 0 ? `$${fmt(r.monto_pagado)} cobrado`
+                       : r.monto_senia > 0 ? `seña $${fmt(r.monto_senia)}` : "";
+        html += `<td>
+          <div class="fw-semibold">${r.es_fijo ? '<i class="bi bi-arrow-repeat me-1" title="Turno fijo"></i>' : ''}${esc(r.cliente_nombre)}</div>
+          <span class="badge ${ESTADO_COLOR[r.estado] || 'bg-secondary'}">${ESTADO_TXT[r.estado] || esc(r.estado)}</span>
+          <span class="text-muted small ms-1">${cobrado}</span>
+        </td>`;
+      } else {
+        libres++;
+        html += `<td><a href="/agenda?semana=${ag.dias[0]}" class="badge badge-libre text-decoration-none">Libre</a></td>`;
+      }
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table>`;
   document.getElementById("detalle-reservas").innerHTML = html;
+  document.getElementById("resumen-canchas").innerHTML =
+    `<span class="badge bg-success me-1">${alquiladas} alquilada${alquiladas !== 1 ? "s" : ""}</span>` +
+    `<span class="badge badge-libre">${libres} libre${libres !== 1 ? "s" : ""}</span>`;
 }
 
 function renderTopProductos(top) {
