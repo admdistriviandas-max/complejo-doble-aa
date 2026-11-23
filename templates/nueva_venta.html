@@ -83,7 +83,7 @@
   .prod-search-result {
     position: absolute; z-index: 999; width: 100%;
     background: #fff; border: 1px solid var(--borde);
-    border-radius: 8px; max-height: 220px; overflow-y: auto;
+    border-radius: 8px; max-height: 320px; overflow-y: auto; overflow-x: hidden;
     box-shadow: 0 4px 12px rgba(0,0,0,.12);
   }
   .prod-search-item {
@@ -254,6 +254,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const hoy = new Date().toISOString().slice(0,10);
   document.getElementById("ticket-fecha").value = hoy;
   cargarProductos();
+  // Al tocar Descripción se despliega la lista de productos
+  ["focus", "click"].forEach(ev =>
+    document.getElementById("buscar-producto").addEventListener(ev, (e) => {
+      if (!document.getElementById("producto-seleccionado-id").value) buscarProducto(e.target.value);
+    })
+  );
   // Enter en el buscador: elige el primer resultado y lo agrega al ticket
   document.getElementById("buscar-producto").addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -286,12 +292,18 @@ async function cargarProductos() {
 // ── Buscar producto ──
 function buscarProducto(q) {
   const box = document.getElementById("resultados-busqueda");
-  if (!q.trim()) { box.style.display = "none"; return; }
   document.getElementById("producto-seleccionado-id").value = "";
-  const found = productos.filter(p => p.nombre.toLowerCase().includes(q.toLowerCase()) ||
-                                      String(p.id).padStart(6, "0").includes(q.trim()));
-  if (!found.length) { box.style.display = "none"; return; }
-  box.innerHTML = found.slice(0, 20).map(p =>
+  q = (q || "").trim().toLowerCase();
+  // Sin texto: se muestran todos los productos (ordenados por nombre); escribiendo, se filtran
+  const found = productos
+    .filter(p => !q || p.nombre.toLowerCase().includes(q) || String(p.id).padStart(6, "0").includes(q))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  if (!found.length) {
+    box.innerHTML = `<div class="prod-search-item text-muted">No hay productos con "${q.replace(/[<>&"]/g, "")}"</div>`;
+    box.style.display = "block";
+    return;
+  }
+  box.innerHTML = found.map(p =>
     `<div class="prod-search-item" onclick="seleccionarProducto(${p.id}, '${p.nombre.replace(/'/g,"\\'")}', ${p.precio})">
       <span>${p.nombre}</span>
       <span class="text-celeste-o fw-bold">$${p.precio.toLocaleString("es-AR")}</span>
