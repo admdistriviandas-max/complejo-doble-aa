@@ -176,11 +176,6 @@
     </div>
   </div>
 
-  {% if ticket.notas %}
-  <hr class="sep">
-  <div class="cliente">{{ ticket.notas }}</div>
-  {% endif %}
-
   <hr class="sep">
 
   <!-- ITEMS -->
@@ -229,7 +224,7 @@
 
   <!-- PIE -->
   <div class="pie">
-    ¡Gracias por su compra!<br>
+    ¡Gracias por elegirnos!<br>
     Ticket Nº {{ '%06d'|format(ticket.numero) }} — {{ ticket.fecha_ar }} {{ ticket.hora }}
   </div>
 
