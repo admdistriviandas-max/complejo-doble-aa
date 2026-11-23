@@ -60,7 +60,9 @@ async def clientes_page(request: Request):
 
 @app.get("/caja", response_class=HTMLResponse)
 async def caja_page(request: Request):
-    return templates.TemplateResponse("caja.html", {"request": request})
+    return templates.TemplateResponse("caja.html", {
+        "request": request, "horarios": HORARIOS, "canchas": CANCHAS
+    })
 
 @app.get("/configuracion", response_class=HTMLResponse)
 async def config_page(request: Request):
@@ -786,10 +788,11 @@ async def resumen_caja(fecha: str = None):
         ) as cur:
             bufet = dict(await cur.fetchone())
 
-        # Señas pendientes de cobro (por todos los turnos futuros)
+        # Pendiente de cobro de los turnos señados del día
+        # (no se suman semanas futuras: los turnos fijos las generan solas y inflarían el número)
         async with db.execute(
             """SELECT SUM(monto_total - monto_pagado) as pendiente
-               FROM reservas WHERE fecha >= ? AND estado IN ('señado') AND monto_total > 0""",
+               FROM reservas WHERE fecha = ? AND estado IN ('señado') AND monto_total > 0""",
             (fecha,)
         ) as cur:
             row = await cur.fetchone()
