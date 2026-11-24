@@ -78,6 +78,18 @@ CREATE TABLE IF NOT EXISTS tickets (
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Cobros de turnos (seña o saldo): cuándo entró la plata, cuánto y cómo
+CREATE TABLE IF NOT EXISTS pagos_reserva (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reserva_id INTEGER NOT NULL,
+    fecha_pago TEXT NOT NULL,     -- YYYY-MM-DD (día en que se cobró, hora Argentina)
+    hora TEXT DEFAULT '',
+    tipo TEXT DEFAULT 'saldo',    -- 'seña' o 'saldo'
+    monto REAL NOT NULL,          -- negativo si es una corrección
+    forma_pago TEXT DEFAULT 'efectivo',  -- 'efectivo' o 'transferencia'
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Turnos fijos: el mismo cliente, mismo día de la semana, misma hora y cancha, todas las semanas
 CREATE TABLE IF NOT EXISTS turnos_fijos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,7 +139,7 @@ async def generar_turnos_fijos(db, desde: date, hasta: date) -> None:
             await db.execute(
                 """INSERT INTO reservas (fecha, hora, cancha, cliente_id, cliente_nombre,
                    estado, monto_total, monto_senia, monto_pagado, notas, turno_fijo_id)
-                   VALUES (?,?,?,?,?,'señado',?,0,0,'Turno fijo',?)""",
+                   VALUES (?,?,?,?,?,'reservado',?,0,0,'Turno fijo',?)""",
                 (f, tf["hora"], tf["cancha"], tf["cliente_id"], tf["cliente_nombre"],
                  tf["monto_total"] or 0, tf["id"])
             )
@@ -168,6 +180,10 @@ async def init_db():
         for col in ("monto_efectivo", "monto_transferencia"):
             if col not in cols_t:
                 await db.execute(f"ALTER TABLE tickets ADD COLUMN {col} REAL DEFAULT 0")
+        # Turnos fijos generados solos sin ninguna seña cargada: no están señados, están "reservados"
+        await db.execute("""UPDATE reservas SET estado='reservado'
+                            WHERE estado='señado' AND notas='Turno fijo'
+                            AND COALESCE(monto_senia,0)=0 AND COALESCE(monto_pagado,0)=0""")
         # Tickets hechos antes del pago mixto: completar el reparto según su forma de pago
         await db.execute("""UPDATE tickets SET monto_efectivo = total WHERE forma_pago='efectivo'
                             AND COALESCE(monto_efectivo,0)=0 AND COALESCE(monto_transferencia,0)=0""")

@@ -116,7 +116,7 @@ async def home(request: Request):
 @app.get("/agenda", response_class=HTMLResponse)
 async def agenda_page(request: Request, semana: str = None):
     if semana is None:
-        hoy = date.today()
+        hoy = hoy_ar()
         # Encontrar el lunes de la semana actual (weekday 0 = lunes)
         dias_desde_lunes = hoy.weekday()
         semana = (hoy - timedelta(days=dias_desde_lunes)).isoformat()
@@ -124,8 +124,30 @@ async def agenda_page(request: Request, semana: str = None):
         "request": request,
         "semana": semana,
         "horarios": HORARIOS,
-        "canchas": CANCHAS
+        "canchas": CANCHAS,
+        "tarifas": {h: tarifa_para(h) for h in HORARIOS},
+        "senia_default": SENIA_DEFAULT,
     })
+
+# Tarifa de la cancha según la hora (como en la ficha: 17 a 19 hs $30.000, 20 a 23 hs $35.000)
+SENIA_DEFAULT = 10000
+def tarifa_para(hora) -> float:
+    try:
+        h = int(hora)
+    except (TypeError, ValueError):
+        return 0
+    return 30000 if h <= 19 else 35000
+
+async def registrar_pago(db, reserva_id: int, tipo: str, monto: float, forma_pago: str):
+    """Anota un cobro de turno (seña o saldo) con la fecha/hora de hoy y su forma de pago."""
+    if not monto:
+        return
+    forma = "transferencia" if forma_pago == "transferencia" else "efectivo"
+    ahora = ahora_ar()
+    await db.execute(
+        """INSERT INTO pagos_reserva (reserva_id, fecha_pago, hora, tipo, monto, forma_pago)
+           VALUES (?,?,?,?,?,?)""",
+        (reserva_id, ahora.date().isoformat(), ahora.strftime("%H:%M"), tipo, float(monto), forma))
 
 @app.get("/bufet", response_class=HTMLResponse)
 async def bufet_page(request: Request):
@@ -187,12 +209,17 @@ async def crear_reserva(request: Request):
     hora = data.get("hora")
     cancha = data.get("cancha")
     cliente_nombre = data.get("cliente_nombre", "").strip()
-    estado = data.get("estado", "señado")
-    monto_total = float(data.get("monto_total", 0))
-    monto_senia = float(data.get("monto_senia", 0))
-    monto_pagado = float(data.get("monto_pagado", 0))
+    monto_total = float(data.get("monto_total", 0) or 0) or tarifa_para(hora)
+    monto_senia = float(data.get("monto_senia", 0) or 0)
+    monto_pagado = float(data.get("monto_pagado", 0) or 0)
+    # Sin seña ni pago, el turno queda "Reservado"; con seña, "Señado"
+    estado = data.get("estado") or ("señado" if monto_senia > 0 else "reservado")
+    if estado == "señado" and monto_senia <= 0 and monto_pagado <= 0:
+        estado = "reservado"
     notas = data.get("notas", "")
     es_fijo = bool(data.get("turno_fijo"))
+    forma_pago = data.get("forma_pago", "efectivo")
+    registrar_cobros = data.get("registrar_cobros", True)
 
     if not all([fecha, hora, cancha, cliente_nombre]):
         raise HTTPException(400, "Datos incompletos")
@@ -239,6 +266,9 @@ async def crear_reserva(request: Request):
              estado, monto_total, monto_senia, monto_pagado, notas, turno_fijo_id)
         )
         reserva_id = cur.lastrowid
+        if registrar_cobros:
+            await registrar_pago(db, reserva_id, "seña", monto_senia, forma_pago)
+            await registrar_pago(db, reserva_id, "saldo", monto_pagado, forma_pago)
         await db.commit()
     finally:
         await db.close()
@@ -273,7 +303,7 @@ async def quitar_turno_fijo(db, turno_fijo_id, fecha):
     )
     await db.execute(
         """UPDATE reservas SET estado='cancelado'
-           WHERE turno_fijo_id=? AND fecha > ? AND estado='señado'
+           WHERE turno_fijo_id=? AND fecha > ? AND estado IN ('señado','reservado')
            AND COALESCE(monto_senia,0)=0 AND COALESCE(monto_pagado,0)=0""",
         (turno_fijo_id, fecha)
     )
@@ -335,10 +365,63 @@ async def actualizar_reserva(reserva_id: int, request: Request):
                 reserva_id
             )
         )
+        # Si se cambió a mano la seña o lo cobrado, la diferencia queda como cobro del día
+        forma = data.get("forma_pago", "efectivo")
+        if "monto_senia" in data:
+            await registrar_pago(db, reserva_id, "seña",
+                                 float(data["monto_senia"] or 0) - float(r["monto_senia"] or 0), forma)
+        if "monto_pagado" in data:
+            await registrar_pago(db, reserva_id, "saldo",
+                                 float(data["monto_pagado"] or 0) - float(r["monto_pagado"] or 0), forma)
         await db.commit()
     finally:
         await db.close()
     return {"ok": True}
+
+
+@app.post("/api/reservas/{reserva_id}/cobrar")
+async def cobrar_reserva(reserva_id: int, request: Request):
+    """Cobro rápido de un turno.
+    accion='senia' → suma una seña (por defecto $10.000) y lo pasa a Señado.
+    accion='total' → cobra el saldo (tarifa − seña − cobrado) y lo pasa a Pagado.
+    accion='no_vino' → lo marca como No vino (sin cobro)."""
+    data = await request.json()
+    accion = data.get("accion")
+    forma = data.get("forma_pago", "efectivo")
+    db = await get_db()
+    try:
+        async with db.execute("SELECT * FROM reservas WHERE id=?", (reserva_id,)) as cur:
+            r = await cur.fetchone()
+        if not r:
+            raise HTTPException(404, "Reserva no encontrada")
+        total = float(r["monto_total"] or 0) or tarifa_para(r["hora"])
+        senia, pagado = float(r["monto_senia"] or 0), float(r["monto_pagado"] or 0)
+        if accion == "senia":
+            monto = _num(data.get("monto")) or SENIA_DEFAULT
+            if monto <= 0:
+                raise HTTPException(400, "El monto de la seña tiene que ser mayor a 0")
+            await db.execute(
+                "UPDATE reservas SET monto_senia=?, monto_total=?, estado=CASE WHEN estado='pagado' THEN estado ELSE 'señado' END WHERE id=?",
+                (senia + monto, total, reserva_id))
+            await registrar_pago(db, reserva_id, "seña", monto, forma)
+            cobrado = monto
+        elif accion == "total":
+            saldo = round(total - senia - pagado, 2)
+            if saldo <= 0:
+                raise HTTPException(400, "Este turno ya está pago")
+            await db.execute("UPDATE reservas SET monto_pagado=?, monto_total=?, estado='pagado' WHERE id=?",
+                             (pagado + saldo, total, reserva_id))
+            await registrar_pago(db, reserva_id, "saldo", saldo, forma)
+            cobrado = saldo
+        elif accion == "no_vino":
+            await db.execute("UPDATE reservas SET estado='no_vino' WHERE id=?", (reserva_id,))
+            cobrado = 0
+        else:
+            raise HTTPException(400, "Acción inválida")
+        await db.commit()
+    finally:
+        await db.close()
+    return {"ok": True, "cobrado": cobrado}
 
 @app.delete("/api/reservas/{reserva_id}")
 async def cancelar_reserva(reserva_id: int):
@@ -446,6 +529,10 @@ def ahora_ar() -> datetime:
 
 def hoy_ar_str() -> str:
     return ahora_ar().strftime("%d/%m/%Y")
+
+def hoy_ar() -> date:
+    """Fecha de hoy en Argentina (el servidor está en hora UTC: de 21 a 24 hs ya sería 'mañana')."""
+    return ahora_ar().date()
 
 def _num(v, default=0.0) -> float:
     try:
@@ -571,7 +658,7 @@ async def eliminar_producto(producto_id: int):
 async def registrar_venta(request: Request):
     data = await request.json()
     items = data.get("items", [])
-    fecha = data.get("fecha", date.today().isoformat())
+    fecha = data.get("fecha", hoy_ar().isoformat())
     forma_pago = data.get("forma_pago", "efectivo")
     if not items:
         raise HTTPException(400, "Sin items")
@@ -700,7 +787,7 @@ async def ver_ticket(request: Request, numero: int):
 @app.get("/api/ventas")
 async def get_ventas(fecha: str = None):
     if not fecha:
-        fecha = date.today().isoformat()
+        fecha = hoy_ar().isoformat()
     db = await get_db()
     try:
         async with db.execute(
@@ -891,7 +978,7 @@ ES_CANCHA = ("UPPER(COALESCE((SELECT p.categoria FROM productos p WHERE p.id = v
 @app.get("/api/caja")
 async def resumen_caja(fecha: str = None):
     if not fecha:
-        fecha = date.today().isoformat()
+        fecha = hoy_ar().isoformat()
     db = await get_db()
     try:
         # Ingresos canchas del día
@@ -912,9 +999,17 @@ async def resumen_caja(fecha: str = None):
             f"SELECT SUM(total) FROM ventas_bufet v WHERE fecha=? AND {ES_CANCHA}", (fecha,)
         ) as cur:
             ventas_cancha = (await cur.fetchone())[0] or 0
-        canchas["cobrado_reservas"] = canchas.get("cobrado") or 0
+        # Cobros de turnos (señas y saldos) hechos ESE día, por forma de pago
+        async with db.execute(
+            """SELECT COALESCE(SUM(monto),0) AS total,
+                      COALESCE(SUM(CASE WHEN forma_pago='efectivo' THEN monto ELSE 0 END),0) AS efectivo,
+                      COALESCE(SUM(CASE WHEN forma_pago='transferencia' THEN monto ELSE 0 END),0) AS transferencia
+               FROM pagos_reserva WHERE fecha_pago=?""", (fecha,)
+        ) as cur:
+            pr = dict(await cur.fetchone())
+        canchas["cobrado_reservas"] = pr["total"]
         canchas["cobrado_ventas"] = ventas_cancha
-        canchas["cobrado"] = canchas["cobrado_reservas"] + ventas_cancha
+        canchas["cobrado"] = pr["total"] + ventas_cancha
 
         # Ingresos bufet del día (sin los cobros de cancha)
         async with db.execute(
@@ -938,12 +1033,14 @@ async def resumen_caja(fecha: str = None):
             (fecha,)
         ) as cur:
             efectivo, transferencia, mixtos = await cur.fetchone()
+        efectivo += pr["efectivo"]
+        transferencia += pr["transferencia"]
 
-        # Pendiente de cobro de los turnos señados del día
+        # Pendiente de cobro de los turnos del día (tarifa − seña − cobrado)
         # (no se suman semanas futuras: los turnos fijos las generan solas y inflarían el número)
         async with db.execute(
-            """SELECT SUM(monto_total - monto_pagado) as pendiente
-               FROM reservas WHERE fecha = ? AND estado IN ('señado') AND monto_total > 0""",
+            """SELECT SUM(monto_total - COALESCE(monto_senia,0) - COALESCE(monto_pagado,0)) as pendiente
+               FROM reservas WHERE fecha = ? AND estado IN ('señado','reservado') AND monto_total > 0""",
             (fecha,)
         ) as cur:
             row = await cur.fetchone()
@@ -1015,7 +1112,7 @@ async def mp_ingresos(fecha: str = None):
         return {"ok": False, "error": "Sin token MP", "total": 0, "cantidad": 0}
 
     if not fecha:
-        fecha = date.today().isoformat()
+        fecha = hoy_ar().isoformat()
 
     # Argentina es UTC-3
     begin = f"{fecha}T00:00:00.000-03:00"

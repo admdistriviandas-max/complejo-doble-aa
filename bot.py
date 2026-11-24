@@ -15,7 +15,11 @@ Intenciones reconocidas:
 import re
 import os
 import httpx
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+
+def _hoy_ar() -> date:
+    """Fecha de hoy en Argentina (UTC-3)."""
+    return datetime.now(timezone(timedelta(hours=-3))).date()
 from fastapi import APIRouter, Request, Form, Response
 from database import get_db, generar_turnos_fijos
 
@@ -45,7 +49,7 @@ def normalizar(txt: str) -> str:
 def resolver_fecha(texto: str) -> date | None:
     """Dado un fragmento de texto, devuelve la fecha más próxima futura que coincida."""
     t = normalizar(texto)
-    hoy = date.today()
+    hoy = _hoy_ar()
     dia_hoy = hoy.weekday()  # 0=lun ... 6=dom
 
     for palabra, wd in DIAS_ES.items():
@@ -158,7 +162,7 @@ async def crear_reserva_bot(fecha: date, hora: int, cancha: int, nombre_cliente:
         cur3 = await db.execute(
             """INSERT INTO reservas (fecha, hora, cancha, cliente_id, cliente_nombre,
                estado, monto_total, monto_senia, monto_pagado, notas)
-               VALUES (?,?,?,?,?,'señado',0,0,0,'Pendiente de pago — WhatsApp')""",
+               VALUES (?,?,?,?,?,'reservado',0,0,0,'Pendiente de pago — WhatsApp')""",
             (fecha.isoformat(), str(hora), cancha, cliente_id, nombre_cliente)
         )
         reserva_id = cur3.lastrowid
@@ -317,7 +321,7 @@ async def procesar_mensaje(body: str, from_number: str) -> str:
             async with db.execute(
                 """SELECT * FROM reservas WHERE cliente_nombre LIKE ? AND fecha >= ?
                    AND estado != 'cancelado' ORDER BY fecha, hora LIMIT 5""",
-                (f"%{from_number[-8:]}%", date.today().isoformat())
+                (f"%{from_number[-8:]}%", _hoy_ar().isoformat())
             ) as cur:
                 reservas = await cur.fetchall()
         finally:

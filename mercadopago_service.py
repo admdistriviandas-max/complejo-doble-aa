@@ -161,6 +161,14 @@ async def mercadopago_webhook(request: Request):
                COALESCE(notas,'') || ' | Seña MP pago_id=' || ? WHERE id=?""",
             (float(monto), str(data_id), reserva_id)
         )
+        # Registrar el cobro (entra a la Caja como transferencia / MP)
+        from datetime import datetime, timezone, timedelta as _td
+        ahora = datetime.now(timezone(_td(hours=-3)))
+        await db.execute(
+            """INSERT INTO pagos_reserva (reserva_id, fecha_pago, hora, tipo, monto, forma_pago)
+               VALUES (?,?,?,'seña',?,'transferencia')""",
+            (reserva_id, ahora.date().isoformat(), ahora.strftime("%H:%M"), float(monto))
+        )
         await db.commit()
 
         # Recuperar número de WhatsApp del cliente
