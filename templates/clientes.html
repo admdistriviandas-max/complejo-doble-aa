@@ -1,40 +1,82 @@
 {% extends "base.html" %}
 {% set active = "clientes" %}
 {% block content %}
+<style>
+  .crm-card { cursor:pointer; border:2px solid transparent; transition:.15s; text-align:center; padding:.7rem .5rem; }
+  .crm-card:hover { border-color: var(--celeste-claro); }
+  .crm-card.activa { border-color: var(--celeste); background: var(--celeste-fondo); }
+  .crm-card .num { font-size:1.6rem; font-weight:800; line-height:1; }
+  .crm-card .lbl { font-size:.78rem; font-weight:600; color:#555; margin-top:.25rem; }
+  .et { font-weight:700; border-radius:6px; padding:2px 8px; font-size:.75rem; white-space:nowrap; }
+  .et-fijo        { background:#D6FAE8; color:#0A6B35; }
+  .et-habitual    { background:#D6EFFA; color:#1F6E95; }
+  .et-ocasional   { background:#FFF3CD; color:#7A5A00; }
+  .et-inactivo    { background:#FFE0E0; color:#9B1C1C; }
+  .et-sin_visitas { background:#EBEBEB; color:#555; }
+  .chip { border:1px solid var(--borde, #dee2e6); border-radius:20px; padding:3px 12px; font-size:.82rem; cursor:pointer; background:#fff; user-select:none; }
+  .chip.on { background: var(--celeste); color:#fff; border-color: var(--celeste); }
+  .td-num { text-align:center; white-space:nowrap; }
+  .fijo-det { font-size:.75rem; color:#0A6B35; }
+  .btn-wa { background:#25D366; color:#fff !important; border:none; white-space:nowrap; }
+  .btn-group:has(.btn-wa) { flex-wrap:nowrap; }
+  .btn-wa:hover { background:#1EB257; }
+  #tabla-crm td { vertical-align: middle; }
+</style>
+
 <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
   <h4 class="fw-bold mb-0"><i class="bi bi-people me-2 text-celeste-o"></i>Clientes</h4>
-  <button class="btn btn-celeste btn-sm" data-bs-toggle="modal" data-bs-target="#modalCliente" onclick="nuevoCliente()">
+  <button class="btn btn-celeste btn-sm" onclick="nuevoCliente()">
     <i class="bi bi-person-plus me-1"></i>Nuevo cliente
   </button>
 </div>
 
+<!-- Resumen por etiqueta: tocar filtra -->
+<div class="row g-2 mb-3" id="tarjetas">
+  <div class="col-4 col-md-2"><div class="card crm-card" data-et=""><div class="num" id="n-todos">-</div><div class="lbl">Todos</div></div></div>
+  <div class="col-4 col-md-2"><div class="card crm-card" data-et="fijo"><div class="num text-success" id="n-fijo">-</div><div class="lbl">Fijos</div></div></div>
+  <div class="col-4 col-md-2"><div class="card crm-card" data-et="habitual"><div class="num text-celeste-o" id="n-habitual">-</div><div class="lbl">Habituales</div></div></div>
+  <div class="col-4 col-md-2"><div class="card crm-card" data-et="ocasional"><div class="num text-warning" id="n-ocasional">-</div><div class="lbl">Ocasionales</div></div></div>
+  <div class="col-4 col-md-2"><div class="card crm-card" data-et="inactivo"><div class="num text-danger" id="n-inactivo">-</div><div class="lbl">Inactivos</div></div></div>
+  <div class="col-4 col-md-2"><div class="card crm-card" data-et="sin_visitas"><div class="num text-secondary" id="n-sin_visitas">-</div><div class="lbl">Sin visitas</div></div></div>
+</div>
+
 <div class="card p-3 mb-3">
-  <div class="input-group">
+  <div class="input-group mb-2">
     <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
-    <input type="text" class="form-control border-start-0" id="buscador" placeholder="Buscar por nombre..."/>
+    <input type="text" class="form-control border-start-0" id="buscador" placeholder="Buscar por nombre o teléfono..."/>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    <span class="chip" data-f="ausentes"><i class="bi bi-hourglass-split me-1"></i>No vienen hace +30 días</span>
+    <span class="chip" data-f="faltadores"><i class="bi bi-x-circle me-1"></i>Faltaron 2 o más veces</span>
+    <span class="chip" data-f="proxima"><i class="bi bi-calendar-check me-1"></i>Con reserva próxima</span>
+    <span class="chip" data-f="sintel"><i class="bi bi-telephone-x me-1"></i>Sin teléfono</span>
   </div>
 </div>
 
 <div class="card p-0">
   <div class="table-responsive">
     <table class="table table-hover mb-0">
-      <thead class="table-light">
+      <thead>
         <tr>
-          <th>Nombre</th>
-          <th>Teléfono</th>
-          <th>Notas</th>
-          <th class="text-center">Historial</th>
+          <th>Cliente</th>
+          <th>WhatsApp</th>
+          <th class="text-center">Visitas</th>
+          <th class="text-center">Faltas</th>
+          <th class="text-center">Última vez</th>
+          <th class="text-center">Próxima</th>
+          <th class="text-end">Total pagado</th>
           <th></th>
         </tr>
       </thead>
-      <tbody id="tabla-clientes"></tbody>
+      <tbody id="tabla-crm"></tbody>
     </table>
   </div>
 </div>
+<div class="small text-muted mt-2" id="pie-crm"></div>
 
 <!-- Modal cliente -->
 <div class="modal fade" id="modalCliente" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered modal-sm">
+  <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header border-0">
         <h5 class="modal-title fw-bold" id="titulo-cliente">Nuevo Cliente</h5>
@@ -48,16 +90,20 @@
         </div>
         <div class="mb-2">
           <label class="form-label fw-semibold">Teléfono / WhatsApp</label>
-          <input type="text" class="form-control" id="cl-tel" placeholder="+549..."/>
+          <input type="tel" class="form-control" id="cl-tel" placeholder="11 2345-6789"/>
+          <div class="form-text">Con el código de área (11 para CABA/GBA). Sin 0 ni 15.</div>
         </div>
         <div class="mb-2">
           <label class="form-label fw-semibold">Notas</label>
-          <textarea class="form-control" id="cl-notas" rows="2"></textarea>
+          <textarea class="form-control" id="cl-notas" rows="2" placeholder="Ej: juega con el equipo de Demian, prefiere cancha 2..."></textarea>
         </div>
       </div>
-      <div class="modal-footer border-0">
-        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
-        <button class="btn btn-celeste btn-sm" onclick="guardarCliente()">Guardar</button>
+      <div class="modal-footer border-0 justify-content-between">
+        <button class="btn btn-outline-danger btn-sm" id="btn-borrar" onclick="borrarCliente()"><i class="bi bi-trash me-1"></i>Borrar</button>
+        <div>
+          <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button class="btn btn-celeste btn-sm" onclick="guardarCliente()">Guardar</button>
+        </div>
       </div>
     </div>
   </div>
@@ -65,7 +111,7 @@
 
 <!-- Modal historial -->
 <div class="modal fade" id="modalHistorial" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered modal-lg">
+  <div class="modal-dialog modal-dialog-centered modal-lg modal-fullscreen-md-down">
     <div class="modal-content">
       <div class="modal-header border-0">
         <h5 class="modal-title fw-bold" id="titulo-historial">Historial</h5>
@@ -80,55 +126,146 @@
 {% block scripts %}
 <script>
 let modalClBS, modalHistBS;
+let CLIENTES = [], HOY = "";
+let filtroEt = "";
+const filtros = new Set();
 const DIAS = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+const ET_TXT = {fijo:"Fijo", habitual:"Habitual", ocasional:"Ocasional", inactivo:"Inactivo", sin_visitas:"Sin visitas"};
+const EST = {señado:"warning", pagado:"success", no_vino:"danger", cancelado:"secondary", reservado:"info"};
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pesos = n => "$" + Math.round(n || 0).toLocaleString("es-AR");
+function fechaCorta(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  return `${DIAS[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}`;
+}
+function sinAcentos(s) { return (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+
+// Número argentino para wa.me: 549 + código de área + número (10 dígitos)
+function waNumero(tel) {
+  let d = (tel || "").replace(/\D/g, "");
+  if (d.startsWith("54")) d = d.slice(2);
+  if (d.startsWith("9") && d.length === 11) d = d.slice(1);
+  if (d.startsWith("0")) d = d.slice(1);
+  if (d.length === 12 && d.slice(2, 4) === "15") d = d.slice(0, 2) + d.slice(4);   // 11 15 xxxx-xxxx
+  return d.length === 10 ? "549" + d : null;
+}
+function primerNombre(n) { return (n || "").trim().split(/\s+/)[0]; }
+function mensajeWA(c, tipo) {
+  const n = primerNombre(c.nombre);
+  if (tipo === "recordar" && c.proxima)
+    return `Hola ${n}! Te recordamos tu turno del ${fechaCorta(c.proxima)} en Complejo Doble AA. ¡Te esperamos!`;
+  if (tipo === "invitar")
+    return `Hola ${n}! ¿Cómo estás? Hace un tiempo que no te vemos por Complejo Doble AA. ¿Querés que te reserve una cancha esta semana?`;
+  return "";
+}
+function abrirWA(id, tipo) {
+  const c = CLIENTES.find(x => x.id === id);
+  const num = waNumero(c.telefono);
+  if (!num) { editarCliente(id); return; }
+  const txt = mensajeWA(c, tipo);
+  window.open(`https://wa.me/${num}` + (txt ? `?text=${encodeURIComponent(txt)}` : ""), "_blank");
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   modalClBS   = new bootstrap.Modal(document.getElementById("modalCliente"));
   modalHistBS = new bootstrap.Modal(document.getElementById("modalHistorial"));
-  cargarClientes();
-  let timer;
-  document.getElementById("buscador").addEventListener("input", e => {
-    clearTimeout(timer);
-    timer = setTimeout(() => cargarClientes(e.target.value), 250);
-  });
+  document.querySelectorAll(".crm-card").forEach(el => el.addEventListener("click", () => {
+    filtroEt = el.dataset.et; render();
+  }));
+  document.querySelectorAll(".chip").forEach(el => el.addEventListener("click", () => {
+    filtros.has(el.dataset.f) ? filtros.delete(el.dataset.f) : filtros.add(el.dataset.f);
+    el.classList.toggle("on"); render();
+  }));
+  document.getElementById("buscador").addEventListener("input", render);
+  document.getElementById("modalCliente").addEventListener("shown.bs.modal", () => document.getElementById("cl-nombre").focus());
+  cargar();
 });
 
-async function cargarClientes(q="") {
-  const res = await fetch(`/api/clientes?q=${encodeURIComponent(q)}`);
-  const lista = await res.json();
-  document.getElementById("tabla-clientes").innerHTML = lista.map(c =>
-    `<tr>
-      <td class="fw-semibold">${c.nombre}</td>
-      <td>${c.telefono ? `<a href="https://wa.me/${c.telefono.replace(/\D/g,'')}" target="_blank" class="text-celeste-o"><i class="bi bi-whatsapp me-1"></i>${c.telefono}</a>` : '<span class="text-muted">-</span>'}</td>
-      <td class="text-muted small">${c.notas||'-'}</td>
-      <td class="text-center">
-        <button class="btn btn-outline-secondary btn-sm py-0" onclick="verHistorial(${c.id},'${c.nombre.replace(/'/g,"\\'")}')">
-          <i class="bi bi-clock-history"></i>
-        </button>
+async function cargar() {
+  const data = await fetch("/api/crm").then(r => r.json());
+  CLIENTES = data.clientes; HOY = data.hoy;
+  const cuenta = {fijo:0, habitual:0, ocasional:0, inactivo:0, sin_visitas:0};
+  CLIENTES.forEach(c => cuenta[c.etiqueta]++);
+  document.getElementById("n-todos").textContent = CLIENTES.length;
+  Object.keys(cuenta).forEach(k => document.getElementById("n-" + k).textContent = cuenta[k]);
+  render();
+}
+
+function pasaFiltros(c) {
+  if (filtroEt && c.etiqueta !== filtroEt) return false;
+  if (filtros.has("ausentes") && !(c.dias_sin_venir !== null && c.dias_sin_venir > 30 && !c.proxima)) return false;
+  if (filtros.has("faltadores") && c.faltas < 2) return false;
+  if (filtros.has("proxima") && !c.proxima) return false;
+  if (filtros.has("sintel") && waNumero(c.telefono)) return false;
+  const q = sinAcentos(document.getElementById("buscador").value.trim());
+  if (q) {
+    const qd = q.replace(/\D/g, "");
+    const enNombre = sinAcentos(c.nombre).includes(q);
+    const enTel = qd.length >= 3 && (c.telefono || "").replace(/\D/g, "").includes(qd);
+    if (!enNombre && !enTel) return false;
+  }
+  return true;
+}
+
+function render() {
+  document.querySelectorAll(".crm-card").forEach(el => el.classList.toggle("activa", el.dataset.et === filtroEt));
+  const lista = CLIENTES.filter(pasaFiltros);
+  document.getElementById("tabla-crm").innerHTML = lista.map(c => {
+    const num = waNumero(c.telefono);
+    const wa = num
+      ? `<div class="btn-group">
+           <button class="btn btn-wa btn-sm py-0" onclick="abrirWA(${c.id},'')" title="${esc(c.telefono)}"><i class="bi bi-whatsapp"></i> ${esc(c.telefono)}</button>
+           <button class="btn btn-wa btn-sm py-0 dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown"></button>
+           <ul class="dropdown-menu">
+             ${c.proxima ? `<li><a class="dropdown-item" href="#" onclick="abrirWA(${c.id},'recordar');return false"><i class="bi bi-bell me-2"></i>Recordar turno del ${fechaCorta(c.proxima)}</a></li>` : ""}
+             <li><a class="dropdown-item" href="#" onclick="abrirWA(${c.id},'invitar');return false"><i class="bi bi-calendar-plus me-2"></i>Invitar a volver</a></li>
+             <li><a class="dropdown-item" href="#" onclick="abrirWA(${c.id},'');return false"><i class="bi bi-chat me-2"></i>Solo abrir el chat</a></li>
+           </ul>
+         </div>`
+      : `<button class="btn btn-outline-secondary btn-sm py-0" onclick="editarCliente(${c.id})"><i class="bi bi-plus"></i> Cargar teléfono</button>`;
+    const ultima = c.ultima
+      ? `${fechaCorta(c.ultima)}<div class="small ${c.dias_sin_venir > 30 ? "text-danger" : "text-muted"}">hace ${c.dias_sin_venir} día${c.dias_sin_venir === 1 ? "" : "s"}</div>`
+      : `<span class="text-muted">-</span>`;
+    return `<tr>
+      <td>
+        <div class="fw-semibold">${esc(c.nombre)} <span class="et et-${c.etiqueta}">${ET_TXT[c.etiqueta]}</span></div>
+        ${c.turnos_fijos.map(t => `<div class="fijo-det"><i class="bi bi-arrow-repeat me-1"></i>${esc(t)}</div>`).join("")}
+        ${c.notas ? `<div class="small text-muted">${esc(c.notas)}</div>` : ""}
       </td>
-      <td class="text-end">
-        <button class="btn btn-outline-celeste btn-sm py-0" onclick="editarCliente(${c.id},'${c.nombre.replace(/'/g,"\\'")}','${(c.telefono||'').replace(/'/g,"\\'")}','${(c.notas||'').replace(/'/g,"\\'")}')">
-          <i class="bi bi-pencil"></i>
-        </button>
+      <td>${wa}</td>
+      <td class="td-num fw-semibold">${c.visitas}</td>
+      <td class="td-num ${c.faltas >= 2 ? "text-danger fw-bold" : ""}">${c.faltas || "-"}</td>
+      <td class="td-num">${ultima}</td>
+      <td class="td-num">${c.proxima ? fechaCorta(c.proxima) : '<span class="text-muted">-</span>'}</td>
+      <td class="text-end">${c.total_pagado ? pesos(c.total_pagado) : '<span class="text-muted">-</span>'}</td>
+      <td class="text-end text-nowrap">
+        <button class="btn btn-outline-secondary btn-sm py-0" onclick="verHistorial(${c.id})" title="Historial"><i class="bi bi-clock-history"></i></button>
+        <button class="btn btn-outline-celeste btn-sm py-0" onclick="editarCliente(${c.id})" title="Editar"><i class="bi bi-pencil"></i></button>
       </td>
-    </tr>`
-  ).join("") || `<tr><td colspan="5" class="text-center text-muted py-4">Sin resultados</td></tr>`;
+    </tr>`;
+  }).join("") || `<tr><td colspan="8" class="text-center text-muted py-4">Sin resultados</td></tr>`;
+  document.getElementById("pie-crm").textContent =
+    `Mostrando ${lista.length} de ${CLIENTES.length} clientes · Habitual: 3 o más visitas en 60 días · Inactivo: no viene hace más de 60 días`;
 }
 
 function nuevoCliente() {
-  document.getElementById("cl-id").value="";
-  document.getElementById("cl-nombre").value="";
-  document.getElementById("cl-tel").value="";
-  document.getElementById("cl-notas").value="";
-  document.getElementById("titulo-cliente").textContent="Nuevo Cliente";
+  ["cl-id","cl-nombre","cl-tel","cl-notas"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("titulo-cliente").textContent = "Nuevo Cliente";
+  document.getElementById("btn-borrar").classList.add("d-none");
+  modalClBS.show();
 }
 
-function editarCliente(id,nombre,tel,notas) {
-  document.getElementById("cl-id").value=id;
-  document.getElementById("cl-nombre").value=nombre;
-  document.getElementById("cl-tel").value=tel;
-  document.getElementById("cl-notas").value=notas;
-  document.getElementById("titulo-cliente").textContent="Editar Cliente";
+function editarCliente(id) {
+  const c = CLIENTES.find(x => x.id === id);
+  document.getElementById("cl-id").value = c.id;
+  document.getElementById("cl-nombre").value = c.nombre;
+  document.getElementById("cl-tel").value = c.telefono || "";
+  document.getElementById("cl-notas").value = c.notas || "";
+  document.getElementById("titulo-cliente").textContent = "Editar Cliente";
+  // Solo se puede borrar quien nunca reservó
+  document.getElementById("btn-borrar").classList.toggle("d-none", !!(c.visitas || c.faltas || c.proxima || c.total_pagado));
   modalClBS.show();
 }
 
@@ -140,28 +277,47 @@ async function guardarCliente() {
     notas: document.getElementById("cl-notas").value.trim()
   };
   if (!body.nombre) { alert("Ingresá el nombre"); return; }
+  if (body.telefono && !waNumero(body.telefono)) {
+    if (!confirm("El teléfono no parece un celular argentino (código de área + número). ¿Guardarlo igual?")) return;
+  }
   const url = id ? `/api/clientes/${id}` : "/api/clientes";
-  await fetch(url, {method: id?"PUT":"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const r = await fetch(url, {method: id ? "PUT" : "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) { alert("No se pudo guardar"); return; }
   modalClBS.hide();
-  cargarClientes(document.getElementById("buscador").value);
+  cargar();
 }
 
-async function verHistorial(id, nombre) {
-  const res = await fetch(`/api/clientes/${id}/historial`);
-  const data = await res.json();
-  document.getElementById("titulo-historial").textContent = `Historial — ${nombre}`;
-  const est = {señado:"warning",pagado:"success",no_vino:"danger",cancelado:"secondary",reservado:"info"};
-  const html = data.reservas.length ? data.reservas.map(r => {
-    const d = new Date(r.fecha+"T00:00:00");
+async function borrarCliente() {
+  const id = document.getElementById("cl-id").value;
+  const nombre = document.getElementById("cl-nombre").value;
+  if (!id || !confirm(`¿Borrar a ${nombre}? No tiene reservas.`)) return;
+  const r = await fetch(`/api/clientes/${id}`, {method: "DELETE"});
+  if (!r.ok) { alert((await r.json()).detail || "No se pudo borrar"); return; }
+  modalClBS.hide();
+  cargar();
+}
+
+async function verHistorial(id) {
+  const c = CLIENTES.find(x => x.id === id);
+  const data = await fetch(`/api/clientes/${id}/historial`).then(r => r.json());
+  document.getElementById("titulo-historial").textContent = `Historial — ${c.nombre}`;
+  const resumen = `<div class="d-flex flex-wrap gap-3 mb-3 small">
+      <span class="et et-${c.etiqueta}">${ET_TXT[c.etiqueta]}</span>
+      <span><strong>${c.visitas}</strong> visitas</span>
+      <span><strong>${c.faltas}</strong> faltas</span>
+      <span>Pagó en total <strong>${pesos(c.total_pagado)}</strong></span>
+    </div>`;
+  const filas = data.reservas.length ? data.reservas.map(r => {
+    const pagado = (r.monto_senia || 0) + (r.monto_pagado || 0);
     return `<div class="d-flex justify-content-between border-bottom py-2 small">
-      <span><strong>${DIAS[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}</strong> · ${r.hora}hs · Cancha ${r.cancha}</span>
+      <span><strong>${fechaCorta(r.fecha)}</strong> · ${esc(r.hora)} hs · Cancha ${r.cancha}${r.fecha >= HOY ? ' <span class="text-celeste-o">(próxima)</span>' : ""}</span>
       <div class="d-flex gap-3 align-items-center">
-        ${r.monto_pagado>0?`<span class="text-muted">Cobrado $${r.monto_pagado.toLocaleString("es-AR")}</span>`:''}
-        <span class="badge bg-${est[r.estado]||'secondary'}">${r.estado}</span>
+        ${pagado > 0 ? `<span class="text-muted">${pesos(pagado)}</span>` : ""}
+        <span class="badge bg-${EST[r.estado] || "secondary"}">${esc(r.estado.replace("_", " "))}</span>
       </div>
     </div>`;
   }).join("") : '<p class="text-muted text-center py-3">Sin reservas registradas</p>';
-  document.getElementById("cuerpo-historial").innerHTML = html;
+  document.getElementById("cuerpo-historial").innerHTML = resumen + filas;
   modalHistBS.show();
 }
 </script>
