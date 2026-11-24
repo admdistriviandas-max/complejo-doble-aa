@@ -456,6 +456,72 @@ async def get_clientes(q: str = ""):
     finally:
         await db.close()
 
+DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+def etiqueta_cliente(es_fijo: bool, visitas_60: int, ultima: str | None, hoy: date) -> str:
+    if es_fijo:
+        return "fijo"
+    if not ultima:
+        return "sin_visitas"
+    dias = (hoy - date.fromisoformat(ultima)).days
+    if visitas_60 >= 3:
+        return "habitual"
+    if dias <= 60:
+        return "ocasional"
+    return "inactivo"
+
+@app.get("/api/crm")
+async def crm_clientes():
+    """Clientes con sus números: visitas, faltas, última y próxima reserva, total pagado y etiqueta."""
+    hoy = hoy_ar()
+    hoy_s = hoy.isoformat()
+    hace60 = (hoy - timedelta(days=60)).isoformat()
+    db = await get_db()
+    try:
+        async with db.execute("""
+            SELECT c.id, c.nombre, COALESCE(c.telefono,'') AS telefono, COALESCE(c.notas,'') AS notas,
+              SUM(CASE WHEN r.fecha < ? AND r.estado NOT IN ('cancelado','no_vino') THEN 1 ELSE 0 END) AS visitas,
+              SUM(CASE WHEN r.fecha < ? AND r.fecha >= ? AND r.estado NOT IN ('cancelado','no_vino') THEN 1 ELSE 0 END) AS visitas_60,
+              SUM(CASE WHEN r.estado = 'no_vino' THEN 1 ELSE 0 END) AS faltas,
+              MAX(CASE WHEN r.fecha < ? AND r.estado NOT IN ('cancelado','no_vino') THEN r.fecha END) AS ultima,
+              MIN(CASE WHEN r.fecha >= ? AND r.estado NOT IN ('cancelado','no_vino') THEN r.fecha END) AS proxima,
+              SUM(CASE WHEN r.estado != 'cancelado'
+                       THEN COALESCE(r.monto_senia,0) + COALESCE(r.monto_pagado,0) ELSE 0 END) AS total_pagado
+            FROM clientes c LEFT JOIN reservas r ON r.cliente_id = c.id
+            GROUP BY c.id ORDER BY c.nombre COLLATE NOCASE
+        """, (hoy_s, hoy_s, hace60, hoy_s, hoy_s)) as cur:
+            filas = [dict(r) for r in await cur.fetchall()]
+        async with db.execute(
+            "SELECT cliente_id, dia_semana, hora, cancha FROM turnos_fijos WHERE activo=1"
+        ) as cur:
+            fijos = {}
+            for t in await cur.fetchall():
+                fijos.setdefault(t["cliente_id"], []).append(
+                    f"{DIAS_SEMANA[int(t['dia_semana'])]} {t['hora']} hs · Cancha {t['cancha']}")
+    finally:
+        await db.close()
+    for f in filas:
+        for k in ("visitas", "visitas_60", "faltas", "total_pagado"):
+            f[k] = f[k] or 0
+        f["turnos_fijos"] = fijos.get(f["id"], [])
+        f["dias_sin_venir"] = (hoy - date.fromisoformat(f["ultima"])).days if f["ultima"] else None
+        f["etiqueta"] = etiqueta_cliente(bool(f["turnos_fijos"]), f["visitas_60"], f["ultima"], hoy)
+    return {"hoy": hoy_s, "clientes": filas}
+
+@app.delete("/api/clientes/{cliente_id}")
+async def borrar_cliente(cliente_id: int):
+    """Solo se pueden borrar clientes que nunca reservaron (por ejemplo, contactos cargados de más)."""
+    db = await get_db()
+    try:
+        async with db.execute("SELECT COUNT(*) FROM reservas WHERE cliente_id=?", (cliente_id,)) as cur:
+            if (await cur.fetchone())[0]:
+                raise HTTPException(400, "El cliente tiene reservas: no se puede borrar")
+        await db.execute("DELETE FROM clientes WHERE id=?", (cliente_id,))
+        await db.commit()
+    finally:
+        await db.close()
+    return {"ok": True}
+
 @app.get("/api/clientes/{cliente_id}/historial")
 async def historial_cliente(cliente_id: int):
     db = await get_db()
