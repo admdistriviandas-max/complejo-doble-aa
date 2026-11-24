@@ -196,15 +196,15 @@ function renderCards(d) {
     <div class="col-12">
       <div class="alert alert-warning d-flex align-items-center gap-2 py-2 mb-0">
         <i class="bi bi-exclamation-triangle-fill"></i>
-        <span>Pendiente de cobro de los turnos señados del día: <strong>$${fmt(d.pendiente_cobro)}</strong></span>
+        <span>Falta cobrar de los turnos del día: <strong>$${fmt(d.pendiente_cobro)}</strong></span>
       </div>
     </div>` : ''}`;
 }
 
 const HORARIOS = {{ horarios | tojson }};
 const CANCHAS = {{ canchas | tojson }};
-const ESTADO_TXT = {señado:"Señado", pagado:"Pagado", no_vino:"No vino"};
-const ESTADO_COLOR = {señado:"bg-warning text-dark", pagado:"bg-success", no_vino:"bg-danger"};
+const ESTADO_TXT = {señado:"Señado", pagado:"Pagado", no_vino:"No vino", reservado:"Reservado"};
+const ESTADO_COLOR = {señado:"bg-warning text-dark", pagado:"bg-success", no_vino:"bg-danger", reservado:"badge-reservado"};
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 // Todas las canchas del día, hora por hora: alquiladas (con nombre) y libres

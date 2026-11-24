@@ -1,5 +1,13 @@
 {% extends "base.html" %}
-{% block head %}{% endblock %}
+{% block head %}
+<style>
+  .pago-toggle .btn { font-weight: 700; }
+  .pago-toggle .btn.active { background: var(--celeste); color: #fff; border-color: var(--celeste); }
+  .acciones-rapidas .btn { font-weight: 700; padding: .55rem .5rem; }
+  .monto-linea { font-size: .72rem; }
+  .celda-cerrada { color: #b5bcc4; font-size: .75rem; }
+</style>
+{% endblock %}
 {% set active = "agenda" %}
 {% block content %}
 <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
@@ -13,12 +21,13 @@
 </div>
 
 <!-- Leyenda -->
-<div class="d-flex gap-2 flex-wrap mb-3">
+<div class="d-flex gap-2 flex-wrap mb-3 align-items-center">
   <span class="badge badge-libre px-2 py-1">Libre</span>
+  <span class="badge badge-reservado px-2 py-1">Reservado (sin seña)</span>
   <span class="badge badge-señado px-2 py-1">Señado</span>
   <span class="badge badge-pagado px-2 py-1">Pagado</span>
   <span class="badge badge-no_vino px-2 py-1">No vino</span>
-  <span class="badge badge-cancelado px-2 py-1">Cancelado</span>
+  <span class="small text-muted ms-2"><i class="bi bi-arrow-repeat"></i> turno fijo</span>
 </div>
 
 <div id="agenda-grid" class="overflow-x-auto"></div>
@@ -36,6 +45,28 @@
         <input type="hidden" id="r-fecha"/>
         <input type="hidden" id="r-hora"/>
         <input type="hidden" id="r-cancha"/>
+
+        <!-- Cobro rápido (solo en turnos ya cargados) -->
+        <div id="cobro-rapido" class="mb-3 p-2 rounded-3" style="background:var(--celeste-fondo);display:none">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="fw-bold small" id="cr-estado-linea"></span>
+          </div>
+          <div class="row g-2 acciones-rapidas">
+            <div class="col-4"><button type="button" class="btn btn-warning w-100" id="btn-cobrar-senia" onclick="cobroRapido('senia')"></button></div>
+            <div class="col-4"><button type="button" class="btn btn-success w-100" id="btn-cobrar-total" onclick="cobroRapido('total')"></button></div>
+            <div class="col-4"><button type="button" class="btn btn-outline-danger w-100" id="btn-no-vino" onclick="cobroRapido('no_vino')">No vino</button></div>
+          </div>
+        </div>
+
+        <!-- Forma de pago (para el cobro rápido y para lo que se cargue a mano) -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold small mb-1">Forma de pago</label>
+          <div class="btn-group w-100 pago-toggle" role="group">
+            <button type="button" class="btn btn-outline-secondary active" data-forma="efectivo" onclick="elegirForma('efectivo')"><i class="bi bi-cash me-1"></i>Efectivo</button>
+            <button type="button" class="btn btn-outline-secondary" data-forma="transferencia" onclick="elegirForma('transferencia')"><i class="bi bi-phone me-1"></i>Transferencia</button>
+          </div>
+        </div>
+
         <div class="row g-3">
           <div class="col-12">
             <label class="form-label fw-semibold">Cliente</label>
@@ -45,6 +76,7 @@
           <div class="col-6">
             <label class="form-label fw-semibold">Estado</label>
             <select class="form-select" id="r-estado">
+              <option value="reservado">Reservado (sin seña)</option>
               <option value="señado">Señado</option>
               <option value="pagado">Pagado</option>
               <option value="no_vino">No vino</option>
@@ -53,15 +85,15 @@
           </div>
           <div class="col-6">
             <label class="form-label fw-semibold">Monto total ($)</label>
-            <input type="number" class="form-control" id="r-total" placeholder="0"/>
+            <input type="number" class="form-control" id="r-total" placeholder="0" inputmode="numeric"/>
           </div>
           <div class="col-6">
             <label class="form-label fw-semibold">Seña ($)</label>
-            <input type="number" class="form-control" id="r-senia" placeholder="0"/>
+            <input type="number" class="form-control" id="r-senia" placeholder="0" inputmode="numeric"/>
           </div>
           <div class="col-6">
             <label class="form-label fw-semibold">Cobrado ($)</label>
-            <input type="number" class="form-control" id="r-cobrado" placeholder="0"/>
+            <input type="number" class="form-control" id="r-cobrado" placeholder="0" inputmode="numeric"/>
           </div>
           <div class="col-12">
             <label class="form-label fw-semibold">Notas</label>
@@ -74,7 +106,7 @@
                 <i class="bi bi-arrow-repeat me-1"></i><span id="r-fijo-label">Turno fijo (todas las semanas)</span>
               </label>
             </div>
-            <div class="form-text" id="r-fijo-ayuda">Se reserva solo, como "Señado", el mismo día y hora todas las semanas.</div>
+            <div class="form-text" id="r-fijo-ayuda"></div>
           </div>
         </div>
       </div>
@@ -94,12 +126,29 @@
 <script>
 const HORARIOS = {{ horarios | tojson }};
 const CANCHAS = {{ canchas | tojson }};
+const TARIFAS = {{ tarifas | tojson }};
+const SENIA_DEFAULT = {{ senia_default }};
 const DIAS_NOMBRE = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const AYUDA_FIJO = 'Se reserva solo, como "Reservado", el mismo día y hora todas las semanas.';
 
 let semanaActual = "{{ semana }}";
 let reservasCache = {};
 let modalBS;
+let formaPago = "efectivo";
+
+// Fechas siempre en hora local (Argentina). toISOString() usa hora UTC y de 21 a 24 hs daría "mañana".
+function isoLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+// Horario habitual (según la ficha): lunes cerrado; martes a viernes desde las 19; sábado y domingo desde las 17
+function esHorarioHabitual(fecha, hora) {
+  const dia = new Date(fecha + "T00:00:00").getDay();
+  if (dia === 1) return false;
+  if (dia === 0 || dia === 6) return true;
+  return parseInt(hora) >= 19;
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   modalBS = new bootstrap.Modal(document.getElementById("modalReserva"));
@@ -109,19 +158,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function irHoy() {
   const hoy = new Date();
-  const dia = hoy.getDay(); // 0=dom, 1=lun ... 6=sab
-  // Encontrar el lunes de esta semana
-  const diasDesdeLunes = (dia - 1 + 7) % 7;
-  const lunes = new Date(hoy);
-  lunes.setDate(hoy.getDate() - diasDesdeLunes);
-  semanaActual = lunes.toISOString().slice(0,10);
+  const diasDesdeLunes = (hoy.getDay() - 1 + 7) % 7;
+  const lunes = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - diasDesdeLunes);
+  semanaActual = isoLocal(lunes);
   cargarAgenda();
 }
 
 function cambiarSemana(dir) {
   const d = new Date(semanaActual + "T00:00:00");
   d.setDate(d.getDate() + dir * 7);
-  semanaActual = d.toISOString().slice(0,10);
+  semanaActual = isoLocal(d);
   cargarAgenda();
 }
 
@@ -137,54 +183,76 @@ async function cargarAgenda() {
   renderGrid(data.dias);
 }
 
+function saldoDe(r) {
+  return Math.max(0, (r.monto_total || 0) - (r.monto_senia || 0) - (r.monto_pagado || 0));
+}
+
+function lineaMontos(r) {
+  if (r.estado === 'pagado') return `$${fmt((r.monto_senia || 0) + (r.monto_pagado || 0))}`;
+  const partes = [];
+  if (r.monto_senia > 0) partes.push(`Seña $${fmt(r.monto_senia)}`);
+  if (r.estado !== 'no_vino' && saldoDe(r) > 0) partes.push(`falta $${fmt(saldoDe(r))}`);
+  return partes.join(' · ');
+}
+
 function renderGrid(dias) {
   const inicio = new Date(dias[0] + "T00:00:00");
   const fin = new Date(dias[dias.length-1] + "T00:00:00");
-  const tituloEl = document.getElementById("titulo-semana");
-  tituloEl.textContent = `${inicio.getDate()} ${MESES[inicio.getMonth()]} — ${fin.getDate()} ${MESES[fin.getMonth()]}`;
+  document.getElementById("titulo-semana").textContent =
+    `${inicio.getDate()} ${MESES[inicio.getMonth()]} — ${fin.getDate()} ${MESES[fin.getMonth()]}`;
 
-  let html = `<table class="table table-bordered mb-0" style="min-width:700px">
+  // El lunes se oculta, salvo que tenga alguna reserva cargada
+  const activos = Object.values(reservasCache).filter(r => r.estado !== 'cancelado');
+  const visibles = dias.filter(f => new Date(f + "T00:00:00").getDay() !== 1 || activos.some(r => r.fecha === f));
+  const hoyStr = isoLocal(new Date());
+
+  let html = `<table class="table table-bordered mb-0" style="min-width:640px">
     <thead>
       <tr>
         <th style="width:60px" class="bg-light"></th>
         <th style="width:50px" class="bg-light text-center text-muted small">Cancha</th>`;
-  for (const f of dias) {
+  for (const f of visibles) {
     const d = new Date(f + "T00:00:00");
-    const hoyStr = new Date().toISOString().slice(0,10);
-    const esHoy = f === hoyStr;
-    html += `<th class="text-center ${esHoy ? 'table-info' : ''}">
-      <div class="fw-bold">${DIAS_NOMBRE[d.getDay()]}</div>
+    html += `<th class="text-center ${f === hoyStr ? 'table-info' : ''}">
+      <div class="fw-bold">${DIAS_NOMBRE[d.getDay()]}${f === hoyStr ? ' <span class="badge bg-info text-dark">Hoy</span>' : ''}</div>
       <div class="small text-muted">${d.getDate()}</div>
     </th>`;
   }
   html += `</tr></thead><tbody>`;
 
   for (const hora of HORARIOS) {
-    for (let i=0; i<CANCHAS.length; i++) {
+    for (let i = 0; i < CANCHAS.length; i++) {
       const cancha = CANCHAS[i];
       html += `<tr>`;
       if (i === 0) {
-        html += `<td rowspan="2" class="hora-label text-center align-middle bg-light">${hora}hs</td>`;
+        html += `<td rowspan="2" class="hora-label text-center align-middle bg-light">${hora}hs
+          <div class="small text-muted fw-normal" style="font-size:.65rem">$${fmt(TARIFAS[hora])}</div></td>`;
       }
       html += `<td class="text-center align-middle small fw-bold text-muted bg-light">#${cancha}</td>`;
-      for (const fecha of dias) {
-        const key = `${fecha}_${hora}_${cancha}`;
-        const r = reservasCache[key];
+      for (const fecha of visibles) {
+        const r = reservasCache[`${fecha}_${hora}_${cancha}`];
+        const click = `onclick="abrirModal('${fecha}','${hora}',${cancha})"`;
         if (r && r.estado !== 'cancelado') {
-          const estado = r.estado;
           html += `<td class="p-1">
-            <div class="turno-card turno-${estado}" onclick="abrirModal('${fecha}','${hora}',${cancha})">
-              <div class="fw-semibold">${r.es_fijo ? '<i class="bi bi-arrow-repeat me-1" title="Turno fijo"></i>' : ''}${r.cliente_nombre}</div>
-              <div class="d-flex justify-content-between mt-1">
-                <span class="badge badge-${estado}">${labelEstado(estado)}</span>
-                ${r.monto_senia > 0 ? `<span class="text-muted">Seña $${fmt(r.monto_senia)}</span>` : ''}
+            <div class="turno-card turno-${r.estado}" ${click}>
+              <div class="fw-semibold">${r.es_fijo ? '<i class="bi bi-arrow-repeat me-1" title="Turno fijo"></i>' : ''}${esc(r.cliente_nombre)}</div>
+              <div class="d-flex justify-content-between align-items-center mt-1 gap-1 flex-wrap">
+                <span class="badge badge-${r.estado}">${labelEstado(r.estado)}</span>
+                <span class="text-muted monto-linea">${lineaMontos(r)}</span>
               </div>
             </div>
           </td>`;
-        } else {
+        } else if (esHorarioHabitual(fecha, hora)) {
           html += `<td class="p-1">
-            <div class="turno-card turno-libre" onclick="abrirModal('${fecha}','${hora}',${cancha})">
+            <div class="turno-card turno-libre" ${click}>
               <span class="text-celeste-o small"><i class="bi bi-plus-circle me-1"></i>Libre</span>
+            </div>
+          </td>`;
+        } else {
+          // Horario que casi no se usa: se ve apagado, pero igual se puede reservar
+          html += `<td class="p-1">
+            <div class="turno-card turno-cerrado text-center" ${click} title="Horario poco usado — tocá para reservar igual">
+              <span class="celda-cerrada">+</span>
             </div>
           </td>`;
         }
@@ -197,21 +265,28 @@ function renderGrid(dias) {
 }
 
 function labelEstado(e) {
-  return {señado:"Señado",pagado:"Pagado",no_vino:"No vino",cancelado:"Cancelado",libre:"Libre"}[e] || e;
+  return {reservado:"Reservado",señado:"Señado",pagado:"Pagado",no_vino:"No vino",cancelado:"Cancelado",libre:"Libre"}[e] || e;
 }
 function fmt(n) { return Number(n||0).toLocaleString("es-AR"); }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+function elegirForma(forma) {
+  formaPago = forma;
+  document.querySelectorAll(".pago-toggle .btn").forEach(b => b.classList.toggle("active", b.dataset.forma === forma));
+}
 
 function abrirModal(fecha, hora, cancha) {
-  const key = `${fecha}_${hora}_${cancha}`;
-  const r = reservasCache[key];
+  const r = reservasCache[`${fecha}_${hora}_${cancha}`];
   document.getElementById("r-fecha").value = fecha;
   document.getElementById("r-hora").value = hora;
   document.getElementById("r-cancha").value = cancha;
+  elegirForma("efectivo");
 
   const d = new Date(fecha + "T00:00:00");
   document.getElementById("modal-titulo").textContent =
     `${DIAS_NOMBRE[d.getDay()]} ${d.getDate()} · ${hora}hs · Cancha ${cancha}`;
 
+  const cobro = document.getElementById("cobro-rapido");
   if (r && r.estado !== 'cancelado') {
     document.getElementById("r-id").value = r.id;
     document.getElementById("r-nombre").value = r.cliente_nombre;
@@ -225,22 +300,62 @@ function abrirModal(fecha, hora, cancha) {
     document.getElementById("r-fijo").dataset.original = r.es_fijo ? "1" : "0";
     document.getElementById("r-fijo-ayuda").textContent = r.es_fijo
       ? "Si lo desactivás, este turno se mantiene y se liberan las semanas siguientes."
-      : 'Se reserva solo, como "Señado", el mismo día y hora todas las semanas.';
+      : AYUDA_FIJO;
+    // Cobro rápido
+    const total = r.monto_total || TARIFAS[hora] || 0;
+    const saldo = Math.max(0, total - (r.monto_senia || 0) - (r.monto_pagado || 0));
+    document.getElementById("cr-estado-linea").innerHTML =
+      `<span class="badge badge-${r.estado} me-1">${labelEstado(r.estado)}</span> Tarifa $${fmt(total)}` +
+      (r.monto_senia > 0 ? ` · Seña $${fmt(r.monto_senia)}` : '') +
+      (r.monto_pagado > 0 ? ` · Cobrado $${fmt(r.monto_pagado)}` : '') +
+      (saldo > 0 ? ` · <b>Falta $${fmt(saldo)}</b>` : ' · <b>Pago completo</b>');
+    const bS = document.getElementById("btn-cobrar-senia"), bT = document.getElementById("btn-cobrar-total");
+    bS.innerHTML = `<i class="bi bi-cash-coin me-1"></i>Seña $${fmt(SENIA_DEFAULT)}`;
+    bS.disabled = r.estado === 'pagado' || saldo <= 0;
+    bT.innerHTML = `<i class="bi bi-check2-circle me-1"></i>Cobrar $${fmt(saldo)}`;
+    bT.disabled = saldo <= 0;
+    document.getElementById("btn-no-vino").disabled = r.estado === 'no_vino' || r.estado === 'pagado';
+    cobro.style.display = "";
   } else {
+    cobro.style.display = "none";
     document.getElementById("r-fijo").checked = false;
     document.getElementById("r-fijo").dataset.original = "0";
-    document.getElementById("r-fijo-ayuda").textContent =
-      'Se reserva solo, como "Señado", el mismo día y hora todas las semanas.';
+    document.getElementById("r-fijo-ayuda").textContent = AYUDA_FIJO;
     document.getElementById("r-id").value = "";
     document.getElementById("r-nombre").value = "";
     document.getElementById("r-estado").value = "señado";
-    document.getElementById("r-total").value = "";
-    document.getElementById("r-senia").value = "10000";
+    document.getElementById("r-total").value = TARIFAS[hora] || "";   // tarifa según la hora
+    document.getElementById("r-senia").value = SENIA_DEFAULT;
     document.getElementById("r-cobrado").value = "";
     document.getElementById("r-notas").value = "";
     document.getElementById("btn-cancelar-reserva").style.display = "none";
   }
   modalBS.show();
+}
+
+// Cobro rápido: seña, saldo completo o "no vino" con un toque
+async function cobroRapido(accion) {
+  const id = document.getElementById("r-id").value;
+  if (!id) return;
+  const res = await fetch(`/api/reservas/${id}/cobrar`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({accion, forma_pago: formaPago})
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) { alert("Error: " + (j.detail || "no se pudo registrar")); return; }
+  modalBS.hide();
+  aviso(accion === 'no_vino' ? "Marcado como No vino"
+        : `Cobrado $${fmt(j.cobrado)} en ${formaPago === 'transferencia' ? 'transferencia' : 'efectivo'}`);
+  cargarAgenda();
+}
+
+function aviso(msg) {
+  const t = document.createElement("div");
+  t.className = "position-fixed bottom-0 end-0 m-3 p-3 rounded-3 text-white fw-bold shadow";
+  t.style.cssText = "background:var(--celeste);z-index:9999;";
+  t.innerHTML = `<i class="bi bi-check-circle-fill me-2"></i>${msg}`;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
 }
 
 async function guardarReserva() {
@@ -255,7 +370,8 @@ async function guardarReserva() {
     monto_senia: document.getElementById("r-senia").value || 0,
     monto_pagado: document.getElementById("r-cobrado").value || 0,
     notas: document.getElementById("r-notas").value,
-    turno_fijo: document.getElementById("r-fijo").checked
+    turno_fijo: document.getElementById("r-fijo").checked,
+    forma_pago: formaPago
   };
   if (!body.cliente_nombre) { alert("Ingresá el nombre del cliente"); return; }
   const fijoOriginal = document.getElementById("r-fijo").dataset.original === "1";
@@ -299,7 +415,7 @@ function setupAutocomplete() {
       list.innerHTML = clientes.map(c =>
         `<button type="button" class="list-group-item list-group-item-action py-1 px-2"
           onclick="selCliente('${c.nombre.replace(/'/g,"\\'")}')">
-          ${c.nombre} ${c.telefono ? '<small class=text-muted>'+c.telefono+'</small>' : ''}
+          ${esc(c.nombre)} ${c.telefono ? '<small class=text-muted>'+esc(c.telefono)+'</small>' : ''}
         </button>`
       ).join("");
     }, 200);

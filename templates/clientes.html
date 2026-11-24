@@ -150,7 +150,7 @@ async function verHistorial(id, nombre) {
   const res = await fetch(`/api/clientes/${id}/historial`);
   const data = await res.json();
   document.getElementById("titulo-historial").textContent = `Historial — ${nombre}`;
-  const est = {señado:"warning",pagado:"success",no_vino:"danger",cancelado:"secondary"};
+  const est = {señado:"warning",pagado:"success",no_vino:"danger",cancelado:"secondary",reservado:"info"};
   const html = data.reservas.length ? data.reservas.map(r => {
     const d = new Date(r.fecha+"T00:00:00");
     return `<div class="d-flex justify-content-between border-bottom py-2 small">

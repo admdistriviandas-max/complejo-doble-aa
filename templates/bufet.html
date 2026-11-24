@@ -111,7 +111,8 @@ let productos = [];
 let modalVentaBS, modalProdBS;
 
 document.addEventListener("DOMContentLoaded", () => {
-  const hoy = new Date().toISOString().slice(0,10);
+  const h = new Date();  // fecha local (no UTC)
+  const hoy = `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,"0")}-${String(h.getDate()).padStart(2,"0")}`;
   document.getElementById("fecha-bufet").value = hoy;
   document.getElementById("fecha-bufet").addEventListener("change", () => {
     cargarVentas(); agregarItemVenta_reset();
